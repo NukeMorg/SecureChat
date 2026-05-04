@@ -9,5 +9,8 @@
     <SolidColorBrush x:Key="OutgoingMessageColor" Color="#FFD1E4FF"/>
     <SolidColorBrush x:Key="IncomingMessageColor" Color="#FFE8E8E8"/>
     <SolidColorBrush x:Key="StatusForeground" Color="#FF666666"/>
-    <SolidColorBrush x:Key="TimestampForeground" Color="#FF999999"/>
+    <SolidColorBrush x:Key="TimestampForeground" Color="#FF333333"/>
+    <!-- Новые цвета для текста сообщений -->
+    <SolidColorBrush x:Key="MessageTextForeground" Color="Black"/>
+    <SolidColorBrush x:Key="FilePathForeground" Color="#FF0D47A1"/>
 </ResourceDictionary>

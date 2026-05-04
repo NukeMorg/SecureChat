@@ -9,5 +9,7 @@
     <SolidColorBrush x:Key="OutgoingMessageColor" Color="Blue"/>
     <SolidColorBrush x:Key="IncomingMessageColor" Color="Gray"/>
     <SolidColorBrush x:Key="StatusForeground" Color="Gray"/>
-    <SolidColorBrush x:Key="TimestampForeground" Color="Gray"/>
+    <SolidColorBrush x:Key="TimestampForeground" Color="LightGray"/>
+    <SolidColorBrush x:Key="MessageTextForeground" Color="White"/>
+    <SolidColorBrush x:Key="FilePathForeground" Color="LightBlue"/>
 </ResourceDictionary>

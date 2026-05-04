@@ -9,8 +9,23 @@
 
     <Window.Resources>
         <local:BoolToHorizontalAlignmentConverter x:Key="BoolToHorizontalAlignmentConverter"/>
-        <local:BoolToBackgroundConverter x:Key="BoolToBackgroundConverter"/>
         <local:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+        <local:FileNameConverter x:Key="FileNameConverter"/>
+
+        <!-- Стили для меню и элементов -->
+        <Style TargetType="Menu">
+            <Setter Property="Background" Value="{DynamicResource SidebarBackground}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundColor}"/>
+        </Style>
+        <Style TargetType="MenuItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundColor}"/>
+            <Style.Triggers>
+                <Trigger Property="IsHighlighted" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource ContactItemBackground}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -20,7 +35,7 @@
         </Grid.RowDefinitions>
 
         <!-- Главное меню -->
-        <Menu Grid.Row="0" Background="{DynamicResource SidebarBackground}" Foreground="{DynamicResource ForegroundColor}">
+        <Menu Grid.Row="0">
             <MenuItem Header="_Файл">
                 <MenuItem Header="Вы_ход" Click="ExitMenu_Click"/>
             </MenuItem>
@@ -32,7 +47,6 @@
             </MenuItem>
         </Menu>
 
-        <!-- Основная область (изначальное содержимое) -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="280"/>
@@ -108,14 +122,24 @@
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Grid HorizontalAlignment="{Binding IsOutgoing, Converter={StaticResource BoolToHorizontalAlignmentConverter}}" Margin="4">
-                                    <Border Background="{Binding IsOutgoing, Converter={StaticResource BoolToBackgroundConverter}}"
-                                            CornerRadius="10" Padding="10,8" MaxWidth="400" SnapsToDevicePixels="True">
+                                    <Border CornerRadius="10" Padding="10,8" MaxWidth="400" SnapsToDevicePixels="True">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="{DynamicResource IncomingMessageColor}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsOutgoing}" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource OutgoingMessageColor}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
                                         <StackPanel>
                                             <TextBlock Text="{Binding Text}" Visibility="{Binding TextVisibility}"
-                                                       Foreground="White" FontSize="13" TextWrapping="Wrap"/>
+                                                       Foreground="{DynamicResource MessageTextForeground}" FontSize="13" TextWrapping="Wrap"/>
                                             <StackPanel Orientation="Horizontal" Visibility="{Binding FileVisibility}">
-                                                <TextBlock Text="📎 " Foreground="White"/>
-                                                <TextBlock Text="{Binding FilePath}" Foreground="#FFB3E5FC" FontSize="13"/>
+                                                <TextBlock Text="📎 " Foreground="{DynamicResource MessageTextForeground}"/>
+                                                <TextBlock Text="{Binding FilePath, Converter={StaticResource FileNameConverter}}" 
+                                                           Foreground="{DynamicResource FilePathForeground}" FontSize="13"/>
                                             </StackPanel>
                                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
                                                 <TextBlock Text="{Binding Timestamp, StringFormat={}{0:HH:mm}}" FontSize="10"

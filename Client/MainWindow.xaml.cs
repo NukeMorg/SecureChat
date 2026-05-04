@@ -35,46 +35,6 @@ public partial class MainWindow : Window
     private Dictionary<int, ObservableCollection<DialogMessage>> _allDialogs = new();
     private TaskCompletionSource<int>? _registrationTcs;
 
-    // ==================== КОНВЕРТЕРЫ ====================
-    public class BoolToHorizontalAlignmentConverter : IValueConverter
-    {
-        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
-        {
-            if (value is bool isOutgoing)
-                return isOutgoing ? HorizontalAlignment.Right : HorizontalAlignment.Left;
-            return HorizontalAlignment.Left;
-        }
-        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
-            => throw new NotImplementedException();
-    }
-
-    public class BoolToBackgroundConverter : IValueConverter
-    {
-        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
-        {
-            if (value is bool isOutgoing)
-                return isOutgoing
-                    ? Application.Current.Resources["OutgoingMessageColor"] as Brush ?? Brushes.Blue
-                    : Application.Current.Resources["IncomingMessageColor"] as Brush ?? Brushes.Gray;
-            return Brushes.Gray;
-        }
-        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
-            => throw new NotImplementedException();
-    }
-
-    public class BoolToVisibilityConverter : IValueConverter
-    {
-        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
-        {
-            if (value is bool b)
-                return b ? Visibility.Visible : Visibility.Collapsed;
-            return Visibility.Collapsed;
-        }
-        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
-            => throw new NotImplementedException();
-    }
-    // ===================================================
-
     public MainWindow()
     {
         InitializeComponent();
@@ -115,7 +75,7 @@ public partial class MainWindow : Window
                     await _network.ConnectAsync(parts[0], int.Parse(parts[1]));
                     await _network.SendAsync(new { Type = "Hello", Payload = new HelloPayload { ClientId = _clientId } });
                     UpdateTitleAndStatus();
-                    break; // успех – выходим из цикла
+                    break;
                 }
                 catch (SocketException)
                 {
@@ -317,7 +277,7 @@ public partial class MainWindow : Window
                         Id = msg.MessageId,
                         SenderId = msg.SenderId,
                         ReceiverId = _clientId,
-                        FilePath = path,
+                        FilePath = path,      // полный путь, конвертер выделит имя
                         ContentType = "File",
                         Status = "✓✓",
                         IsOutgoing = false,
@@ -432,30 +392,71 @@ public partial class MainWindow : Window
     private async void AttachFileButton_Click(object sender, RoutedEventArgs e)
     {
         if (_currentContactId <= 0) { MessageBox.Show("Выберите получателя"); return; }
-        byte[]? sessionKey = _dialogManager.GetSessionKey(_currentContactId);
-        if (sessionKey == null) { MessageBox.Show("Сначала отправьте текстовое сообщение."); return; }
-        var dlg = new Microsoft.Win32.OpenFileDialog();
-        if (dlg.ShowDialog() == true)
+        try
         {
-            try
+            byte[]? sessionKey = _dialogManager.GetSessionKey(_currentContactId);
+            bool firstMsg = sessionKey == null;
+            string? encryptedKeyBase64 = null;
+
+            if (firstMsg)
             {
-                await _fileTransfer.SendFileAsync(_currentContactId, dlg.FileName, sessionKey);
+                var tcs = new TaskCompletionSource<string>();
+                void handler(PublicKeyResponsePayload p) { if (p.TargetId == _currentContactId) tcs.TrySetResult(p.PublicKey); }
+                _network.OnPublicKeyResponse += handler;
+                await _network.SendAsync(new { Type = "GetPublicKey", Payload = new GetPublicKeyPayload { TargetId = _currentContactId } });
+                string pubKey = await tcs.Task;
+                _network.OnPublicKeyResponse -= handler;
+
+                sessionKey = _dialogManager.GetOrCreateSessionKey(_currentContactId);
+                byte[] encKey = _crypto.RsaEncrypt(pubKey, sessionKey);
+                encryptedKeyBase64 = Convert.ToBase64String(encKey);
+            }
+
+            var dlg = new Microsoft.Win32.OpenFileDialog();
+            if (dlg.ShowDialog() == true)
+            {
+                byte[] fileData = File.ReadAllBytes(dlg.FileName);
+                var (ciphertext, nonce, tag) = _crypto.AesGcmEncrypt(sessionKey!, fileData);
+                string transferId = Guid.NewGuid().ToString();
+                var msgId = Guid.NewGuid().ToString();
+
+                await _network.SendAsync(new
+                {
+                    Type = "SendMessage",
+                    Payload = new SendMessagePayload
+                    {
+                        ReceiverId = _currentContactId,
+                        MessageId = msgId,
+                        EncryptedKey = encryptedKeyBase64,
+                        EncryptedData = new EncryptedData
+                        {
+                            Nonce = Convert.ToBase64String(nonce),
+                            Ciphertext = Convert.ToBase64String(ciphertext),
+                            Tag = Convert.ToBase64String(tag)
+                        },
+                        ContentType = "File",
+                        FileName = Path.GetFileName(dlg.FileName),
+                        FileSize = fileData.Length,
+                        FileTransferId = transferId
+                    }
+                });
+
                 AddMessage(_currentContactId, new DialogMessage
                 {
-                    Id = Guid.NewGuid().ToString(),
+                    Id = msgId,
                     SenderId = _clientId,
                     ReceiverId = _currentContactId,
-                    FilePath = Path.GetFileName(dlg.FileName),
+                    FilePath = Path.GetFileName(dlg.FileName),   // только имя файла
                     ContentType = "File",
                     Status = "✓",
                     IsOutgoing = true,
                     Timestamp = DateTime.Now
                 });
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Не удалось отправить файл: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Не удалось отправить файл: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -494,7 +495,6 @@ public partial class MainWindow : Window
         _network.Disconnect();
     }
 
-    // ========== Обработчики меню ==========
     private void ExitMenu_Click(object sender, RoutedEventArgs e)
     {
         Window_Closing(sender, null);
