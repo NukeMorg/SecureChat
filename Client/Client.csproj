@@ -1,0 +1,41 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<OutputType>WinExe</OutputType>
+		<TargetFramework>net9.0-windows</TargetFramework>
+		<UseWPF>true</UseWPF>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<RootNamespace>SecureChat.Client</RootNamespace>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Compile Include="..\Server\MessageTypes.cs" Link="MessageTypes.cs" />
+	</ItemGroup>
+
+	<!-- Файлы тем как ресурсы -->
+
+	<!-- Settings -->
+	<ItemGroup>
+		<None Update="Properties\Settings.settings">
+			<Generator>SettingsSingleFileGenerator</Generator>
+			<LastGenOutput>Settings.Designer.cs</LastGenOutput>
+		</None>
+		<Compile Update="Properties\Settings.Designer.cs">
+			<DesignTimeSharedInput>True</DesignTimeSharedInput>
+			<AutoGen>True</AutoGen>
+			<DependentUpon>Settings.settings</DependentUpon>
+		</Compile>
+	</ItemGroup>
+	<ItemGroup>
+	  <Page Update="Themes\DarkTheme.xaml">
+	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+	  </Page>
+	  <Page Update="Themes\LightTheme.xaml">
+	    <Generator>MSBuild:Compile</Generator>
+	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+	  </Page>
+	  <Page Update="Themes\StubTheme.xaml">
+	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+	  </Page>
+	</ItemGroup>
+</Project>

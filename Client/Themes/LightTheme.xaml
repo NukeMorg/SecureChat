@@ -1,0 +1,13 @@
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <SolidColorBrush x:Key="WindowBackground" Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="ForegroundColor" Color="Black"/>
+    <SolidColorBrush x:Key="SidebarBackground" Color="#FFF5F5F5"/>
+    <SolidColorBrush x:Key="ContactItemBackground" Color="#FFE0E0E0"/>
+    <SolidColorBrush x:Key="ChatAreaBackground" Color="#FFFAFAFA"/>
+    <SolidColorBrush x:Key="InputAreaBackground" Color="#FFF0F0F0"/>
+    <SolidColorBrush x:Key="OutgoingMessageColor" Color="#FFD1E4FF"/>
+    <SolidColorBrush x:Key="IncomingMessageColor" Color="#FFE8E8E8"/>
+    <SolidColorBrush x:Key="StatusForeground" Color="#FF666666"/>
+    <SolidColorBrush x:Key="TimestampForeground" Color="#FF999999"/>
+</ResourceDictionary>
