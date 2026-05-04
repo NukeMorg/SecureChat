@@ -21,35 +21,9 @@ class Program
             var listener = new TcpListener(IPAddress.Any, 9000);
             listener.Start();
             Console.WriteLine("Сервер запущен на порту 9000");
+            Console.WriteLine("UDP discovery запущен на порту 9001");
 
-            // UDP discovery
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    using var udp = new UdpClient(9001);
-                    udp.EnableBroadcast = true;
-                    Console.WriteLine("UDP Discovery на порту 9001 запущен");
-
-                    while (true)
-                    {
-                        var result = await udp.ReceiveAsync();
-                        string request = Encoding.UTF8.GetString(result.Buffer);
-                        if (request == "DISCOVER_SECURECHAT")
-                        {
-                            string localIP = GetLocalIPAddress();
-                            string response = $"SECURECHAT_SERVER|{localIP}:9000";
-                            byte[] data = Encoding.UTF8.GetBytes(response);
-                            await udp.SendAsync(data, data.Length, result.RemoteEndPoint);
-                            Console.WriteLine($"Ответил на discovery: {response}");
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Discovery error: {ex.Message}");
-                }
-            });
+            _ = Task.Run(StartUdpDiscovery);
 
             while (true)
             {
@@ -63,13 +37,27 @@ class Program
         }
     }
 
-    static string GetLocalIPAddress()
+    static async Task StartUdpDiscovery()
     {
-        var host = Dns.GetHostEntry(Dns.GetHostName());
-        foreach (var ip in host.AddressList)
-            if (ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
-                return ip.ToString();
-        return "127.0.0.1";
+        using var udp = new UdpClient(9001);
+        while (true)
+        {
+            try
+            {
+                var result = await udp.ReceiveAsync();
+                string msg = Encoding.UTF8.GetString(result.Buffer);
+                if (msg == "DISCOVER_SECURECHAT_SERVER")
+                {
+                    byte[] response = Encoding.UTF8.GetBytes("SECURECHAT_SERVER_RESPONSE");
+                    await udp.SendAsync(response, response.Length, result.RemoteEndPoint);
+                    Console.WriteLine($"Обнаружен запрос от {result.RemoteEndPoint}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"UDP discovery error: {ex.Message}");
+            }
+        }
     }
 
     static async Task HandleClient(TcpClient tcp)
@@ -87,7 +75,7 @@ class Program
                 int read = await stream.ReadAsync(lenBuf, 0, 4);
                 if (read < 4) break;
                 int len = BitConverter.ToInt32(lenBuf, 0);
-                if (len <= 0 || len > 10 * 1024 * 1024) break;
+                if (len <= 0 || len > 100 * 1024 * 1024) break; // увеличен лимит до 100 МБ
 
                 char[] jsonBuf = new char[len];
                 int total = 0;
@@ -118,6 +106,9 @@ class Program
                         await ProcessFileChunk(msg, clientId.Value); break;
                     case "GetUsers" when clientId != null:
                         await ProcessGetUsers(writer); break;
+                    case "UpdateProfile" when clientId != null:
+                        await ProcessUpdateProfile(msg, clientId.Value);
+                        break;
                     case "Ping":
                         await Send(writer, new { Type = "Pong" }); break;
                 }
@@ -134,7 +125,6 @@ class Program
         }
     }
 
-    // Остальные методы без изменений...
     static async Task ProcessRegister(BaseMessage msg, StreamWriter writer)
     {
         var p = msg.Payload.Deserialize<RegisterPayload>();
@@ -229,8 +219,22 @@ class Program
 
     static async Task ProcessGetUsers(StreamWriter writer)
     {
-        var ids = db.GetAllUserIds();
-        await Send(writer, new { Type = "UserList", Payload = new UserListPayload { Users = ids } });
+        var users = db.GetAllUsers();
+        var list = users.Select(u => new UserInfo { Id = u.id, Name = u.name }).ToList();
+        await Send(writer, new { Type = "UserList", Payload = new UserListPayload { Users = list } });
+    }
+
+    static async Task ProcessUpdateProfile(BaseMessage msg, int clientId)
+    {
+        var p = msg.Payload.Deserialize<UpdateProfilePayload>();
+        db.UpdateUserName(clientId, p.UserName);
+        var notification = new
+        {
+            Type = "UserProfileUpdated",
+            Payload = new UserProfileUpdatedPayload { UserId = clientId, UserName = p.UserName }
+        };
+        foreach (var sw in clients.Values)
+            await Send(sw, notification);
     }
 
     static async Task Send(StreamWriter writer, object obj)

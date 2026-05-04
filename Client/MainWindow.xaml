@@ -7,12 +7,18 @@
         Foreground="{DynamicResource ForegroundColor}"
         Closing="Window_Closing">
 
+    <Window.InputBindings>
+        <KeyBinding Command="{x:Static local:MainWindow.ExitCommand}" Gesture="Ctrl+Q"/>
+        <KeyBinding Command="{x:Static local:MainWindow.ToggleThemeCommand}" Gesture="Ctrl+T"/>
+        <KeyBinding Command="{x:Static local:MainWindow.ChangeNameCommand}" Gesture="Ctrl+N"/>
+        <KeyBinding Command="{x:Static local:MainWindow.ChangeServerAddressCommand}" Gesture="Ctrl+S"/>
+    </Window.InputBindings>
+
     <Window.Resources>
         <local:BoolToHorizontalAlignmentConverter x:Key="BoolToHorizontalAlignmentConverter"/>
         <local:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
         <local:FileNameConverter x:Key="FileNameConverter"/>
 
-        <!-- Стили для меню и элементов -->
         <Style TargetType="Menu">
             <Setter Property="Background" Value="{DynamicResource SidebarBackground}"/>
             <Setter Property="Foreground" Value="{DynamicResource ForegroundColor}"/>
@@ -34,16 +40,18 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- Главное меню -->
         <Menu Grid.Row="0">
             <MenuItem Header="_Файл">
-                <MenuItem Header="Вы_ход" Click="ExitMenu_Click"/>
+                <MenuItem Header="Вы_ход" Command="{x:Static local:MainWindow.ExitCommand}" InputGestureText="Ctrl+Q"/>
+            </MenuItem>
+            <MenuItem Header="_Сервер">
+                <MenuItem Header="Указать адрес сервера..." Command="{x:Static local:MainWindow.ChangeServerAddressCommand}" InputGestureText="Ctrl+S"/>
             </MenuItem>
             <MenuItem Header="_Вид">
-                <MenuItem Header="_Сменить тему" Click="ToggleThemeMenu_Click"/>
+                <MenuItem Header="_Сменить тему" Command="{x:Static local:MainWindow.ToggleThemeCommand}" InputGestureText="Ctrl+T"/>
             </MenuItem>
             <MenuItem Header="_Профиль">
-                <MenuItem Header="Изменить _имя..." Click="ChangeNameMenu_Click"/>
+                <MenuItem Header="Изменить _имя..." Command="{x:Static local:MainWindow.ChangeNameCommand}" InputGestureText="Ctrl+N"/>
             </MenuItem>
         </Menu>
 
@@ -74,12 +82,6 @@
                             <Button Content="Новый диалог" Click="NewDialogButton_Click" 
                                     Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
                                     BorderThickness="0" Height="25" FontSize="11" Margin="5"/>
-                            <Button Content="Обновить" Click="RefreshUsers_Click" 
-                                    Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
-                                    BorderThickness="0" Height="25" FontSize="11"/>
-                            <Button Content="Тема" Click="ToggleTheme_Click"
-                                    Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
-                                    BorderThickness="0" Height="25" FontSize="11" Margin="5,0,0,0"/>
                         </StackPanel>
                     </StackPanel>
 
@@ -95,8 +97,8 @@
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
-                                        <TextBlock Text="{Binding Key, StringFormat='User {0}'}" FontWeight="SemiBold" FontSize="13"/>
-                                        <TextBlock Grid.Row="1" Text="{Binding Value}" FontSize="11"
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"/>
+                                        <TextBlock Grid.Row="1" Text="{Binding StatusText}" FontSize="11"
                                                    Foreground="{DynamicResource StatusForeground}" TextTrimming="CharacterEllipsis"/>
                                     </Grid>
                                 </Border>

@@ -19,6 +19,7 @@ public class NetworkService
     public event Action<DeliveryStatusPayload>? OnDeliveryStatus;
     public event Action<PublicKeyResponsePayload>? OnPublicKeyResponse;
     public event Action<UserListPayload>? OnUserList;
+    public event Action<UserProfileUpdatedPayload>? OnUserProfileUpdated;
     public event Action<string>? OnError;
     public event Action? OnConnected;
     public event Action? OnDisconnected;
@@ -42,7 +43,7 @@ public class NetworkService
         {
             OnError?.Invoke($"Ошибка подключения: {ex.Message}");
             Disconnect();
-            throw; // пробрасываем, чтобы вызывающий код мог повторить попытку
+            throw;
         }
         catch (Exception ex)
         {
@@ -84,7 +85,7 @@ public class NetworkService
                 int read = await _stream!.ReadAsync(lenBuf, 0, 4);
                 if (read < 4) break;
                 int len = BitConverter.ToInt32(lenBuf, 0);
-                if (len <= 0 || len > 10 * 1024 * 1024) break;
+                if (len <= 0 || len > 100 * 1024 * 1024) break;
 
                 char[] buf = new char[len];
                 int total = 0;
@@ -112,6 +113,9 @@ public class NetworkService
                     case "UserList":
                         OnUserList?.Invoke(msg.Payload.Deserialize<UserListPayload>());
                         break;
+                    case "UserProfileUpdated":
+                        OnUserProfileUpdated?.Invoke(msg.Payload.Deserialize<UserProfileUpdatedPayload>());
+                        break;
                     case "RegisterResponse":
                         var reg = msg.Payload.Deserialize<RegisterResponsePayload>();
                         OnRegisterResponse?.Invoke(reg.AssignedId);
@@ -120,7 +124,6 @@ public class NetworkService
                         var err = msg.Payload.Deserialize<SimpleStatusPayload>();
                         OnError?.Invoke(err.Status);
                         break;
-                        // Pong игнорируется
                 }
             }
         }

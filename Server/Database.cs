@@ -11,8 +11,18 @@ public class Database
         using var conn = new SqliteConnection(cs);
         conn.Open();
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "CREATE TABLE IF NOT EXISTS Clients (Id INTEGER PRIMARY KEY AUTOINCREMENT, PublicKey TEXT NOT NULL)";
+        cmd.CommandText = @"CREATE TABLE IF NOT EXISTS Clients (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            PublicKey TEXT NOT NULL,
+            UserName TEXT DEFAULT 'User')";
         cmd.ExecuteNonQuery();
+        // добавляем столбец, если таблица существовала ранее
+        try
+        {
+            cmd.CommandText = "ALTER TABLE Clients ADD COLUMN UserName TEXT DEFAULT 'User'";
+            cmd.ExecuteNonQuery();
+        }
+        catch { }
     }
 
     public int AddUser(string pubKey)
@@ -45,15 +55,36 @@ public class Database
         return cmd.ExecuteScalar() as string;
     }
 
-    public List<int> GetAllUserIds()
+    public void UpdateUserName(int id, string userName)
     {
-        var list = new List<int>();
         using var conn = new SqliteConnection(cs);
         conn.Open();
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT Id FROM Clients";
+        cmd.CommandText = "UPDATE Clients SET UserName = @name WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@name", userName);
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.ExecuteNonQuery();
+    }
+
+    public string? GetUserName(int id)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT UserName FROM Clients WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", id);
+        return cmd.ExecuteScalar() as string;
+    }
+
+    public List<(int id, string name)> GetAllUsers()
+    {
+        var list = new List<(int, string)>();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Id, UserName FROM Clients";
         using var reader = cmd.ExecuteReader();
-        while (reader.Read()) list.Add(reader.GetInt32(0));
+        while (reader.Read()) list.Add((reader.GetInt32(0), reader.GetString(1)));
         return list;
     }
 }

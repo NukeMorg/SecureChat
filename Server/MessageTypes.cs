@@ -147,8 +147,30 @@ public class SimpleStatusPayload
     public string Status { get; set; }
 }
 
+public class UserInfo
+{
+    [JsonPropertyName("Id")]
+    public int Id { get; set; }
+    [JsonPropertyName("Name")]
+    public string Name { get; set; }
+}
+
 public class UserListPayload
 {
     [JsonPropertyName("Users")]
-    public List<int> Users { get; set; }
+    public List<UserInfo> Users { get; set; }
+}
+
+public class UpdateProfilePayload
+{
+    [JsonPropertyName("UserName")]
+    public string UserName { get; set; }
+}
+
+public class UserProfileUpdatedPayload
+{
+    [JsonPropertyName("UserId")]
+    public int UserId { get; set; }
+    [JsonPropertyName("UserName")]
+    public string UserName { get; set; }
 }
