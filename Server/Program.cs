@@ -4,36 +4,31 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text;
 using SecureChat.Common;
+using Microsoft.Data.Sqlite;
 
 namespace SecureChat.Server;
 
 class Program
 {
     static ConcurrentDictionary<int, StreamWriter> clients = new();
-    static ConcurrentDictionary<string, int> messageSenders = new();
     static Database db = new();
+
+    
 
     static async Task Main()
     {
-        try
-        {
-            db.Initialize();
-            var listener = new TcpListener(IPAddress.Any, 9000);
-            listener.Start();
-            Console.WriteLine("Сервер запущен на порту 9000");
-            Console.WriteLine("UDP discovery запущен на порту 9001");
+        db.Initialize();
+        var listener = new TcpListener(IPAddress.Any, 9000);
+        listener.Start();
+        Console.WriteLine("Сервер запущен на порту 9000");
+        Console.WriteLine("UDP discovery запущен на порту 9001");
 
-            _ = Task.Run(StartUdpDiscovery);
+        _ = Task.Run(StartUdpDiscovery);
 
-            while (true)
-            {
-                var tcp = await listener.AcceptTcpClientAsync();
-                _ = Task.Run(() => HandleClient(tcp));
-            }
-        }
-        catch (Exception ex)
+        while (true)
         {
-            Console.WriteLine($"Критическая ошибка сервера: {ex.Message}");
+            var tcp = await listener.AcceptTcpClientAsync();
+            _ = Task.Run(() => HandleClient(tcp));
         }
     }
 
@@ -53,10 +48,7 @@ class Program
                     Console.WriteLine($"Обнаружен запрос от {result.RemoteEndPoint}");
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"UDP discovery error: {ex.Message}");
-            }
+            catch (Exception ex) { Console.WriteLine($"UDP discovery error: {ex.Message}"); }
         }
     }
 
@@ -75,7 +67,7 @@ class Program
                 int read = await stream.ReadAsync(lenBuf, 0, 4);
                 if (read < 4) break;
                 int len = BitConverter.ToInt32(lenBuf, 0);
-                if (len <= 0 || len > 100 * 1024 * 1024) break; // увеличен лимит до 100 МБ
+                if (len <= 0 || len > 100 * 1024 * 1024) break;
 
                 char[] jsonBuf = new char[len];
                 int total = 0;
@@ -98,26 +90,24 @@ class Program
                         break;
                     case "GetPublicKey" when clientId != null:
                         await ProcessGetPublicKey(msg, writer); break;
+                    case "GetUserInfo" when clientId != null:
+                        await ProcessGetUserInfo(msg, writer); break;
                     case "SendMessage" when clientId != null:
                         await ProcessSendMessage(msg, clientId.Value, writer); break;
                     case "Ack" when clientId != null:
                         await ProcessAck(msg); break;
-                    case "FileChunk" when clientId != null:
-                        await ProcessFileChunk(msg, clientId.Value); break;
-                    case "GetUsers" when clientId != null:
-                        await ProcessGetUsers(writer); break;
+                    case "GetHistory" when clientId != null:
+                        await ProcessGetHistory(msg, clientId.Value, writer); break;
+                    case "GetContacts" when clientId != null:
+                        await ProcessGetContacts(clientId.Value, writer); break;
                     case "UpdateProfile" when clientId != null:
-                        await ProcessUpdateProfile(msg, clientId.Value);
-                        break;
+                        await ProcessUpdateProfile(msg, clientId.Value); break;
                     case "Ping":
                         await Send(writer, new { Type = "Pong" }); break;
                 }
             }
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Ошибка обработки клиента {clientId}: {ex.Message}");
-        }
+        catch (Exception ex) { Console.WriteLine($"Ошибка обработки клиента {clientId}: {ex.Message}"); }
         finally
         {
             if (clientId.HasValue) clients.TryRemove(clientId.Value, out _);
@@ -154,21 +144,60 @@ class Program
     {
         var p = msg.Payload.Deserialize<GetPublicKeyPayload>();
         string? key = db.GetPublicKey(p.TargetId);
-        if (key == null)
-            await Send(writer, new { Type = "PublicKeyResponse", Payload = new PublicKeyResponsePayload { Status = "NotFound", TargetId = p.TargetId } });
-        else
-            await Send(writer, new { Type = "PublicKeyResponse", Payload = new PublicKeyResponsePayload { Status = "Ok", TargetId = p.TargetId, PublicKey = key } });
+        await Send(writer, new
+        {
+            Type = "PublicKeyResponse",
+            Payload = new PublicKeyResponsePayload
+            {
+                Status = key != null ? "Ok" : "NotFound",
+                TargetId = p.TargetId,
+                PublicKey = key ?? ""
+            }
+        });
+    }
+
+    static async Task ProcessGetUserInfo(BaseMessage msg, StreamWriter writer)
+    {
+        var p = msg.Payload.Deserialize<GetUserInfoPayload>();
+        string? name = db.GetUserName(p.TargetId);
+        await Send(writer, new
+        {
+            Type = "UserInfoResponse",
+            Payload = new UserInfoResponsePayload
+            {
+                Status = name != null ? "Ok" : "NotFound",
+                UserId = p.TargetId,
+                UserName = name ?? ""
+            }
+        });
     }
 
     static async Task ProcessSendMessage(BaseMessage msg, int senderId, StreamWriter writer)
     {
         var p = msg.Payload.Deserialize<SendMessagePayload>();
+        // сохраняем в БД
+        db.SaveMessage(
+            p.MessageId,
+            senderId,
+            p.ReceiverId,
+            p.EncryptedKey,
+            p.EncryptedData?.Nonce,
+            p.EncryptedData?.Ciphertext,
+            p.EncryptedData?.Tag,
+            p.ContentType,
+            p.FileName,
+            p.FileSize,
+            p.FileTransferId,
+            "Sent"
+        );
+        // добавляем контакты
+        db.AddContact(senderId, p.ReceiverId);
+
         if (!clients.TryGetValue(p.ReceiverId, out var recvWriter))
         {
             await Send(writer, new { Type = "DeliveryStatus", Payload = new DeliveryStatusPayload { MessageId = p.MessageId, Status = "UserOffline" } });
             return;
         }
-        messageSenders[p.MessageId] = senderId;
         await Send(recvWriter, new
         {
             Type = "IncomingMessage",
@@ -190,38 +219,54 @@ class Program
     static async Task ProcessAck(BaseMessage msg)
     {
         var p = msg.Payload.Deserialize<AckPayload>();
-        if (p.Status == "Delivered" && messageSenders.TryRemove(p.MessageId, out int senderId))
+        if (p.Status == "Delivered")
         {
-            if (clients.TryGetValue(senderId, out var sw))
+            db.UpdateMessageStatus(p.MessageId, "Delivered");
+            // оповещаем отправителя, если он онлайн
+            var senderId = GetSenderByMessageId(p.MessageId);
+            if (senderId.HasValue && clients.TryGetValue(senderId.Value, out var sw))
+            {
                 await Send(sw, new { Type = "DeliveryStatus", Payload = new DeliveryStatusPayload { MessageId = p.MessageId, Status = "Delivered" } });
+            }
         }
     }
 
-    static async Task ProcessFileChunk(BaseMessage msg, int senderId)
+    static int? GetSenderByMessageId(string messageId)
     {
-        var p = msg.Payload.Deserialize<FileChunkPayload>();
-        if (!clients.TryGetValue(p.ReceiverId, out var sw)) return;
-        await Send(sw, new
+        using var conn = new SqliteConnection(db.ConnectionString);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT SenderId FROM Messages WHERE MessageId = @id";
+        cmd.Parameters.AddWithValue("@id", messageId);
+        var result = cmd.ExecuteScalar();
+        return result != null ? Convert.ToInt32(result) : (int?)null;
+    }
+
+    static async Task ProcessGetHistory(BaseMessage msg, int userId, StreamWriter writer)
+    {
+        var p = msg.Payload.Deserialize<GetHistoryRequestPayload>();
+        var messages = db.GetHistory(userId, p.ContactId);
+        await Send(writer, new
         {
-            Type = "FileChunk",
-            Payload = new
-            {
-                SenderId = senderId,
-                FileTransferId = p.FileTransferId,
-                ChunkIndex = p.ChunkIndex,
-                TotalChunks = p.TotalChunks,
-                Offset = p.Offset,
-                Length = p.Length,
-                Data = p.Data
-            }
+            Type = "HistoryResponse",
+            Payload = new HistoryResponsePayload { ContactId = p.ContactId, Messages = messages }
         });
     }
 
-    static async Task ProcessGetUsers(StreamWriter writer)
+    static async Task ProcessGetContacts(int userId, StreamWriter writer)
     {
-        var users = db.GetAllUsers();
-        var list = users.Select(u => new UserInfo { Id = u.id, Name = u.name }).ToList();
-        await Send(writer, new { Type = "UserList", Payload = new UserListPayload { Users = list } });
+        var contactIds = db.GetContactIds(userId);
+        var contacts = new List<UserInfo>();
+        foreach (var id in contactIds)
+        {
+            var name = db.GetUserName(id) ?? $"User {id}";
+            contacts.Add(new UserInfo { Id = id, Name = name });
+        }
+        await Send(writer, new
+        {
+            Type = "ContactList",
+            Payload = new ContactListPayload { Contacts = contacts }
+        });
     }
 
     static async Task ProcessUpdateProfile(BaseMessage msg, int clientId)

@@ -14,12 +14,16 @@ public class NetworkService
     private NetworkStream? _stream;
     private StreamReader? _reader;
     private StreamWriter? _writer;
+    private volatile bool _isDisconnecting;
 
     public event Action<IncomingMessagePayload>? OnIncomingMessage;
     public event Action<DeliveryStatusPayload>? OnDeliveryStatus;
     public event Action<PublicKeyResponsePayload>? OnPublicKeyResponse;
     public event Action<UserListPayload>? OnUserList;
     public event Action<UserProfileUpdatedPayload>? OnUserProfileUpdated;
+    public event Action<UserInfoResponsePayload>? OnUserInfoResponse;
+    public event Action<HistoryResponsePayload>? OnHistoryResponse;
+    public event Action<ContactListPayload>? OnContactList;
     public event Action<string>? OnError;
     public event Action? OnConnected;
     public event Action? OnDisconnected;
@@ -29,6 +33,7 @@ public class NetworkService
 
     public async Task ConnectAsync(string host, int port)
     {
+        _isDisconnecting = false;
         try
         {
             _tcp = new TcpClient();
@@ -57,10 +62,9 @@ public class NetworkService
     {
         if (_stream == null || !_tcp!.Connected)
         {
-            OnError?.Invoke("Нет подключения к серверу");
+            if (!_isDisconnecting) OnError?.Invoke("Нет подключения к серверу");
             return;
         }
-
         try
         {
             string json = JsonSerializer.Serialize(message);
@@ -71,7 +75,7 @@ public class NetworkService
         }
         catch (Exception ex)
         {
-            OnError?.Invoke($"Ошибка отправки: {ex.Message}");
+            if (!_isDisconnecting) OnError?.Invoke($"Ошибка отправки: {ex.Message}");
         }
     }
 
@@ -116,6 +120,15 @@ public class NetworkService
                     case "UserProfileUpdated":
                         OnUserProfileUpdated?.Invoke(msg.Payload.Deserialize<UserProfileUpdatedPayload>());
                         break;
+                    case "UserInfoResponse":
+                        OnUserInfoResponse?.Invoke(msg.Payload.Deserialize<UserInfoResponsePayload>());
+                        break;
+                    case "HistoryResponse":
+                        OnHistoryResponse?.Invoke(msg.Payload.Deserialize<HistoryResponsePayload>());
+                        break;
+                    case "ContactList":
+                        OnContactList?.Invoke(msg.Payload.Deserialize<ContactListPayload>());
+                        break;
                     case "RegisterResponse":
                         var reg = msg.Payload.Deserialize<RegisterResponsePayload>();
                         OnRegisterResponse?.Invoke(reg.AssignedId);
@@ -127,19 +140,21 @@ public class NetworkService
                 }
             }
         }
+        catch (Exception ex) when (ex is IOException || ex is ObjectDisposedException) { }
         catch (Exception ex)
         {
-            OnError?.Invoke($"Ошибка чтения данных: {ex.Message}");
+            if (!_isDisconnecting) OnError?.Invoke($"Ошибка чтения данных: {ex.Message}");
         }
         finally
         {
             OnDisconnected?.Invoke();
-            Disconnect();
+            if (!_isDisconnecting) Disconnect();
         }
     }
 
     public void Disconnect()
     {
+        _isDisconnecting = true;
         try { _writer?.Close(); } catch { }
         try { _reader?.Close(); } catch { }
         try { _stream?.Close(); } catch { }

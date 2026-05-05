@@ -82,6 +82,9 @@
                             <Button Content="Новый диалог" Click="NewDialogButton_Click" 
                                     Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
                                     BorderThickness="0" Height="25" FontSize="11" Margin="5"/>
+                            <Button Content="Тема" Click="ToggleTheme_Click"
+                                    Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
+                                    BorderThickness="0" Height="25" FontSize="11" Margin="5,0,0,0"/>
                         </StackPanel>
                     </StackPanel>
 

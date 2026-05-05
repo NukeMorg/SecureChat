@@ -9,12 +9,9 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<Compile Include="..\Server\MessageTypes.cs" Link="MessageTypes.cs" />
+		<Compile Include="..\Shared\MessageTypes.cs" Link="MessageTypes.cs" />
 	</ItemGroup>
 
-	<!-- Файлы тем как ресурсы -->
-
-	<!-- Settings -->
 	<ItemGroup>
 		<None Update="Properties\Settings.settings">
 			<Generator>SettingsSingleFileGenerator</Generator>
@@ -27,15 +24,15 @@
 		</Compile>
 	</ItemGroup>
 	<ItemGroup>
-	  <Page Update="Themes\DarkTheme.xaml">
-	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-	  </Page>
-	  <Page Update="Themes\LightTheme.xaml">
-	    <Generator>MSBuild:Compile</Generator>
-	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-	  </Page>
-	  <Page Update="Themes\StubTheme.xaml">
-	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-	  </Page>
+		<Page Update="Themes\DarkTheme.xaml">
+			<CopyToOutputDirectory>Never</CopyToOutputDirectory>
+		</Page>
+		<Page Update="Themes\LightTheme.xaml">
+			<Generator>MSBuild:Compile</Generator>
+			<CopyToOutputDirectory>Never</CopyToOutputDirectory>
+		</Page>
+		<Page Update="Themes\StubTheme.xaml">
+			<CopyToOutputDirectory>Never</CopyToOutputDirectory>
+		</Page>
 	</ItemGroup>
 </Project>
