@@ -3,6 +3,7 @@ using System.Windows;
 
 namespace SecureChat.Client.Models;
 
+// Сообщение в диалоге: текст, файл, статус, отправитель.
 public class DialogMessage
 {
     public string Id { get; set; }
@@ -15,6 +16,7 @@ public class DialogMessage
     public bool IsOutgoing { get; set; }
     public DateTime Timestamp { get; set; }
 
+    // Видимость блоков в зависимости от типа содержимого
     public Visibility TextVisibility => ContentType == "Text" ? Visibility.Visible : Visibility.Collapsed;
     public Visibility FileVisibility => ContentType == "File" ? Visibility.Visible : Visibility.Collapsed;
 }

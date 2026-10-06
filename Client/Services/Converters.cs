@@ -3,10 +3,10 @@ using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Data;
-using System.Windows.Media;
 
-namespace SecureChat.Client
+namespace SecureChat.Client.Services
 {
+    // Конвертер bool → HorizontalAlignment (Right для исходящих, Left для входящих).
     public class BoolToHorizontalAlignmentConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
@@ -20,6 +20,7 @@ namespace SecureChat.Client
             => throw new NotImplementedException();
     }
 
+    // Конвертер bool → Visibility (Visible если true, Collapsed если false).
     public class BoolToVisibilityConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
@@ -33,6 +34,7 @@ namespace SecureChat.Client
             => throw new NotImplementedException();
     }
 
+    // Конвертер, извлекающий имя файла из полного пути.
     public class FileNameConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)

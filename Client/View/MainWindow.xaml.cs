@@ -1,10 +1,10 @@
 ﻿using SecureChat.Client.Models;
 using SecureChat.Client.Properties;
+using SecureChat.Client.Services;
 using SecureChat.Common;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -38,6 +38,7 @@ public partial class MainWindow : Window
     public static readonly RoutedCommand ToggleThemeCommand = new();
     public static readonly RoutedCommand ChangeNameCommand = new();
     public static readonly RoutedCommand ChangeServerAddressCommand = new();
+    public static readonly RoutedCommand SettingsCommand = new();
 
     public MainWindow()
     {
@@ -55,43 +56,108 @@ public partial class MainWindow : Window
         _network.OnUserInfoResponse += OnUserInfoResponse;
         _network.OnHistoryResponse += OnHistoryResponse;
         _network.OnContactList += OnContactList;
+        _network.OnAddContactResponse += OnAddContactResponse;
+
+        _network.OnUserOnline += userId =>
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var contact = _contacts.FirstOrDefault(c => c.Id == userId);
+                if (contact != null) contact.IsOnline = true;
+            });
+        };
+        _network.OnUserOffline += userId =>
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var contact = _contacts.FirstOrDefault(c => c.Id == userId);
+                if (contact != null) contact.IsOnline = false;
+            });
+        };
 
         CommandBindings.Add(new CommandBinding(ExitCommand, (s, e) => Application.Current.Shutdown()));
         CommandBindings.Add(new CommandBinding(ToggleThemeCommand, (s, e) => ToggleTheme_Click(s, e)));
         CommandBindings.Add(new CommandBinding(ChangeNameCommand, (s, e) => ChangeName_Click(s, e)));
         CommandBindings.Add(new CommandBinding(ChangeServerAddressCommand, (s, e) => ChangeServerAddress_Click(s, e)));
+        CommandBindings.Add(new CommandBinding(SettingsCommand, (s, e) => { /* Открыть окно настроек */ }));
 
         this.Loaded += MainWindow_Loaded;
+
+        ContactsListBox.ItemsSource = _contacts;
     }
 
-    private async void ChangeServerAddress_Click(object sender, RoutedEventArgs e)
-    {
-        string? newAddress = ShowInputDialog("Адрес сервера (ip:port)", _serverAddress);
-        if (string.IsNullOrWhiteSpace(newAddress)) return;
-
-        _serverAddress = newAddress.Trim();
-        SaveConfig();
-
-        try
-        {
-            _network.Disconnect();
-            var parts = _serverAddress.Split(':');
-            await _network.ConnectAsync(parts[0], int.Parse(parts[1]));
-            await _network.SendAsync(new { Type = "Hello", Payload = new HelloPayload { ClientId = _clientId } });
-            await RequestContactsAsync();
-            UpdateTitleAndStatus();
-            MessageBox.Show("Подключение к серверу выполнено успешно.", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Не удалось подключиться к серверу {_serverAddress}:\n{ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
+    // ---------- Подключение и конфигурация ----------
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         this.Loaded -= MainWindow_Loaded;
         await LoadConfigAndConnectAsync();
+    }
+
+    private void AutoDiscover_Click(object sender, RoutedEventArgs e)
+    {
+        // Логика автоматического поиска сервера (уже есть в начале загрузки)
+        _ = Dispatcher.InvokeAsync(async () =>
+        {
+            string? addr = await DiscoverServerAsync();
+            if (!string.IsNullOrEmpty(addr))
+            {
+                _serverAddress = addr;
+                SaveConfig();
+                MessageBox.Show($"Найден сервер: {addr}", "Обнаружение", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                MessageBox.Show("Сервер не найден в локальной сети.", "Обнаружение", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        });
+    }
+
+    private void Reconnect_Click(object sender, RoutedEventArgs e)
+    {
+        _ = Dispatcher.InvokeAsync(async () =>
+        {
+            try
+            {
+                _network.Disconnect();
+                var parts = _serverAddress.Split(':');
+                await _network.ConnectAsync(parts[0], int.Parse(parts[1]));
+                await _network.SendAsync(new { Type = "Hello", Payload = new HelloPayload { ClientId = _clientId } });
+                await RequestContactsAsync();
+                UpdateTitleAndStatus();
+                MessageBox.Show("Переподключение выполнено.", "Сервер", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка переподключения: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        });
+    }
+
+    private void SetFontSize_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem item && item.Tag is string sizeStr && double.TryParse(sizeStr, out double size))
+        {
+            Properties.Settings.Default.Save();
+        }
+    }
+
+    private void ShowMyPublicKey_Click(object sender, RoutedEventArgs e)
+    {
+        Clipboard.SetText(_publicKeyXml);
+        MessageBox.Show("Публичный ключ скопирован в буфер обмена.", "Ключ", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void About_Click(object sender, RoutedEventArgs e)
+    {
+        MessageBox.Show("SecureChat v2.0\n\nБезопасный чат с оконечным шифрованием.\nИспользует RSA+AES-GCM.\n",
+                        "О программе", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void HelpGuide_Click(object sender, RoutedEventArgs e)
+    {
+        var helpWindow = new HelpWindow();
+        helpWindow.Owner = this;
+        helpWindow.Show();
     }
 
     private async Task LoadConfigAndConnectAsync()
@@ -129,7 +195,6 @@ public partial class MainWindow : Window
                         SaveConfig();
                         continue;
                     }
-                    // вручную
                     bool manualEntry = false;
                     Dispatcher.Invoke(() =>
                     {
@@ -155,34 +220,16 @@ public partial class MainWindow : Window
         }
         else
         {
-            string? discoveredAddress = await DiscoverServerAsync();
-            if (string.IsNullOrEmpty(discoveredAddress))
+            // Первый запуск – сразу запрашиваем адрес сервера без автообнаружения
+            string? manualAddress = ShowInputDialog("Адрес сервера (ip:port)", "192.168.1.100:9000");
+            if (string.IsNullOrWhiteSpace(manualAddress))
             {
-                bool manualEntry = false;
-                Dispatcher.Invoke(() =>
-                {
-                    var result = MessageBox.Show("Не удалось автоматически найти сервер.\nВвести адрес вручную?",
-                        "Сервер не найден", MessageBoxButton.YesNo, MessageBoxImage.Question);
-                    manualEntry = (result == MessageBoxResult.Yes);
-                });
-                if (manualEntry)
-                {
-                    string? manualAddress = ShowInputDialog("Адрес сервера (ip:port)", "192.168.1.100:9000");
-                    if (string.IsNullOrWhiteSpace(manualAddress))
-                    {
-                        MessageBox.Show("Адрес не указан. Приложение будет закрыто.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-                        Application.Current.Shutdown();
-                        return;
-                    }
-                    discoveredAddress = manualAddress.Trim();
-                }
-                else
-                {
-                    MessageBox.Show("Приложение будет закрыто.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-                    Application.Current.Shutdown();
-                    return;
-                }
+                MessageBox.Show("Адрес не указан. Приложение будет закрыто.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                Application.Current.Shutdown();
+                return;
             }
+
+            string discoveredAddress = manualAddress.Trim();
 
             _serverAddress = discoveredAddress;
             var keys = _crypto.GenerateRsaKeyPair();
@@ -213,7 +260,11 @@ public partial class MainWindow : Window
                     attempt++;
                     if (attempt >= maxAttempts)
                     {
-                        Dispatcher.Invoke(() => MessageBox.Show($"Не удалось подключиться к серверу после {maxAttempts} попыток.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error));
+                        Dispatcher.Invoke(() => MessageBox.Show(
+                            $"Не удалось подключиться к серверу после {maxAttempts} попыток.",
+                            "Ошибка",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error));
                         Application.Current.Shutdown();
                         return;
                     }
@@ -221,7 +272,11 @@ public partial class MainWindow : Window
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() => MessageBox.Show($"Критическая ошибка: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error));
+                    Dispatcher.Invoke(() => MessageBox.Show(
+                        $"Критическая ошибка: {ex.Message}",
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error));
                     Application.Current.Shutdown();
                     return;
                 }
@@ -233,19 +288,6 @@ public partial class MainWindow : Window
     {
         try { await _network.SendAsync(new { Type = "GetContacts" }); }
         catch { }
-    }
-
-    private async void ChangeName_Click(object sender, RoutedEventArgs e)
-    {
-        string newName = ShowInputDialog("Имя пользователя", _userName);
-        if (!string.IsNullOrWhiteSpace(newName) && newName != _userName)
-        {
-            _userName = newName.Trim();
-            SaveConfig();
-            UpdateTitleAndStatus();
-            try { await _network.SendAsync(new { Type = "UpdateProfile", Payload = new { UserName = _userName } }); }
-            catch (Exception ex) { MessageBox.Show($"Не удалось обновить имя на сервере: {ex.Message}"); }
-        }
     }
 
     private async Task<string?> DiscoverServerAsync(int timeoutMs = 2000)
@@ -299,6 +341,7 @@ public partial class MainWindow : Window
         UserIdTextBlock.Text = connected ? $"{_userName} (ID: {_clientId})" : $"{_userName} (ID: {_clientId}) (отключено)";
     }
 
+    // ---------- Обработчики сетевых событий ----------
     private void OnUserProfileUpdated(UserProfileUpdatedPayload update)
     {
         Dispatcher.Invoke(() =>
@@ -331,18 +374,30 @@ public partial class MainWindow : Window
             var existingIds = new HashSet<string>(_allDialogs[contactId].Select(m => m.Id));
             foreach (var hm in history.Messages)
             {
-                if (existingIds.Contains(hm.MessageId)) continue; // уже есть
+                if (existingIds.Contains(hm.MessageId)) continue;
 
                 byte[]? sessionKey = null;
                 if (hm.SenderId == _clientId)
                 {
-                    // наши сообщения
                     sessionKey = _dialogManager.GetSessionKey(contactId);
-                    if (sessionKey == null) continue; // не можем расшифровать
+                    if (sessionKey == null)
+                    {
+                        // === ИЗМЕНЕНИЕ: пытаемся восстановить сессионный ключ из EncryptedKeySelf ===
+                        if (hm.EncryptedKeySelf != null)
+                        {
+                            byte[] encKeySelf = Convert.FromBase64String(hm.EncryptedKeySelf);
+                            byte[] decKey = _crypto.RsaDecrypt(_privateKeyXml, encKeySelf);
+                            _dialogManager.SetSessionKey(contactId, decKey);
+                            sessionKey = decKey;
+                        }
+                        else
+                        {
+                            continue;   // без ключа пропускаем
+                        }
+                    }
                 }
                 else if (hm.SenderId == contactId)
                 {
-                    // входящие – расшифровываем своим приватным ключом
                     if (hm.EncryptedKey != null)
                     {
                         byte[] encKey = Convert.FromBase64String(hm.EncryptedKey);
@@ -379,7 +434,6 @@ public partial class MainWindow : Window
                 }
                 else if (hm.ContentType == "File")
                 {
-                    // файлы не расшифровываем в истории, просто показываем имя
                     var msg = new DialogMessage
                     {
                         Id = hm.MessageId,
@@ -408,11 +462,10 @@ public partial class MainWindow : Window
             {
                 if (!_allDialogs.ContainsKey(user.Id))
                     _allDialogs[user.Id] = new ObservableCollection<DialogMessage>();
-                _contacts.Add(new ContactItem { Id = user.Id, Name = user.Name });
+                _contacts.Add(new ContactItem { Id = user.Id, Name = user.Name, IsOnline = user.IsOnline});
             }
-            // запрашиваем историю для первого контакта, если есть
             if (_contacts.Count > 0 && _currentContactId == -1)
-                ContactsListBox_SelectionChanged(null, null);
+                ContactsListBox.SelectedIndex = 0;
         });
     }
 
@@ -489,6 +542,30 @@ public partial class MainWindow : Window
         });
     }
 
+    private void OnAddContactResponse(AddContactResponsePayload response)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (response.Status == "NotFound")
+            {
+                MessageBox.Show($"Пользователь с ID {response.ContactId} не найден на сервере.",
+                                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                var contact = _contacts.FirstOrDefault(c => c.Id == response.ContactId);
+                if (contact != null)
+                {
+                    _contacts.Remove(contact);
+                    if (_allDialogs.ContainsKey(response.ContactId))
+                        _allDialogs.Remove(response.ContactId);
+                    if (_currentContactId == response.ContactId)
+                    {
+                        _currentContactId = -1;
+                        MessagesListBox.ItemsSource = null;
+                    }
+                }
+            }
+        });
+    }
+
     private void AddMessage(int contactId, DialogMessage msg)
     {
         if (!_allDialogs.ContainsKey(contactId))
@@ -504,18 +581,44 @@ public partial class MainWindow : Window
             MessagesListBox.ItemsSource = _allDialogs[contactId];
     }
 
-    private void NewDialogButton_Click(object sender, RoutedEventArgs e)
+    // ---------- Кнопки и интерфейс ----------
+    private async void NewDialogButton_Click(object sender, RoutedEventArgs e)
     {
-        if (int.TryParse(RecipientIdTextBox.Text, out int id) && id != _clientId)
+        string input = RecipientIdTextBox.Text.Trim();
+        if (string.IsNullOrEmpty(input))
         {
-            if (!_allDialogs.ContainsKey(id))
-            {
-                _allDialogs[id] = new ObservableCollection<DialogMessage>();
-                _contacts.Add(new ContactItem { Id = id, Name = $"User {id}" });
-                // запрашиваем имя с сервера
-                _ = RequestContactNameAsync(id);
-            }
+            MessageBox.Show("Введите ID пользователя.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
         }
+        if (!int.TryParse(input, out int id))
+        {
+            MessageBox.Show("ID должен быть числом.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (id == _clientId)
+        {
+            MessageBox.Show("Нельзя добавить самого себя.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (_contacts.Any(c => c.Id == id))
+        {
+            MessageBox.Show("Контакт уже существует.", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+            ContactsListBox.SelectedItem = _contacts.First(c => c.Id == id);
+            RecipientIdTextBox.Clear();
+            return;
+        }
+
+        var newContact = new ContactItem { Id = id, Name = $"User {id}" };
+        _contacts.Add(newContact);
+        if (!_allDialogs.ContainsKey(id))
+            _allDialogs[id] = new ObservableCollection<DialogMessage>();
+
+        try { await _network.SendAsync(new { Type = "AddContact", Payload = new AddContactPayload { ContactId = id } }); }
+        catch { }
+
+        _ = RequestContactNameAsync(id);
+        ContactsListBox.SelectedItem = newContact;
+        RecipientIdTextBox.Clear();
     }
 
     private async Task RequestContactNameAsync(int userId)
@@ -533,7 +636,6 @@ public partial class MainWindow : Window
                 _allDialogs[_currentContactId] = new ObservableCollection<DialogMessage>();
             MessagesListBox.ItemsSource = _allDialogs[_currentContactId];
 
-            // запрашиваем историю с сервера, если диалог пуст
             if (_allDialogs[_currentContactId].Count == 0)
             {
                 try { await _network.SendAsync(new { Type = "GetHistory", Payload = new GetHistoryRequestPayload { ContactId = contact.Id } }); }
@@ -553,6 +655,7 @@ public partial class MainWindow : Window
             byte[]? sessionKey = _dialogManager.GetSessionKey(_currentContactId);
             bool firstMsg = sessionKey == null;
             string? encryptedKeyBase64 = null;
+            string? encryptedKeySelfBase64 = null; // === ИЗМЕНЕНИЕ ===
 
             if (firstMsg)
             {
@@ -573,6 +676,10 @@ public partial class MainWindow : Window
                 sessionKey = _dialogManager.GetOrCreateSessionKey(_currentContactId);
                 byte[] encKey = _crypto.RsaEncrypt(pubKey, sessionKey);
                 encryptedKeyBase64 = Convert.ToBase64String(encKey);
+
+                // === ИЗМЕНЕНИЕ: шифруем ключ и для себя ===
+                byte[] encKeySelf = _crypto.RsaEncrypt(_publicKeyXml, sessionKey);
+                encryptedKeySelfBase64 = Convert.ToBase64String(encKeySelf);
             }
 
             byte[] plain = Encoding.UTF8.GetBytes(text);
@@ -587,6 +694,7 @@ public partial class MainWindow : Window
                     ReceiverId = _currentContactId,
                     MessageId = msgId,
                     EncryptedKey = encryptedKeyBase64,
+                    EncryptedKeySelf = encryptedKeySelfBase64,   // === ИЗМЕНЕНИЕ ===
                     EncryptedData = new EncryptedData
                     {
                         Nonce = Convert.ToBase64String(nonce),
@@ -621,6 +729,7 @@ public partial class MainWindow : Window
             byte[]? sessionKey = _dialogManager.GetSessionKey(_currentContactId);
             bool firstMsg = sessionKey == null;
             string? encryptedKeyBase64 = null;
+            string? encryptedKeySelfBase64 = null; // === ИЗМЕНЕНИЕ ===
 
             if (firstMsg)
             {
@@ -637,6 +746,10 @@ public partial class MainWindow : Window
                 sessionKey = _dialogManager.GetOrCreateSessionKey(_currentContactId);
                 byte[] encKey = _crypto.RsaEncrypt(pubKey, sessionKey);
                 encryptedKeyBase64 = Convert.ToBase64String(encKey);
+
+                // === ИЗМЕНЕНИЕ: шифруем ключ и для себя ===
+                byte[] encKeySelf = _crypto.RsaEncrypt(_publicKeyXml, sessionKey);
+                encryptedKeySelfBase64 = Convert.ToBase64String(encKeySelf);
             }
 
             var dlg = new Microsoft.Win32.OpenFileDialog();
@@ -655,6 +768,7 @@ public partial class MainWindow : Window
                         ReceiverId = _currentContactId,
                         MessageId = msgId,
                         EncryptedKey = encryptedKeyBase64,
+                        EncryptedKeySelf = encryptedKeySelfBase64,   // === ИЗМЕНЕНИЕ ===
                         EncryptedData = new EncryptedData
                         {
                             Nonce = Convert.ToBase64String(nonce),
@@ -675,7 +789,7 @@ public partial class MainWindow : Window
                     ReceiverId = _currentContactId,
                     FilePath = Path.GetFileName(dlg.FileName),
                     ContentType = "File",
-                    Status = "✓",
+                    Status = "Отправка...",
                     IsOutgoing = true,
                     Timestamp = DateTime.Now
                 });
@@ -700,6 +814,48 @@ public partial class MainWindow : Window
         App.ApplyTheme(newTheme);
         Settings.Default.Theme = newTheme;
         Settings.Default.Save();
+    }
+
+    private void ChangeName_Click(object sender, RoutedEventArgs e)
+    {
+        ChangeName_Execute();
+    }
+
+    private async void ChangeName_Execute()
+    {
+        string? newName = ShowInputDialog("Имя пользователя", _userName);
+        if (!string.IsNullOrWhiteSpace(newName) && newName != _userName)
+        {
+            _userName = newName.Trim();
+            SaveConfig();
+            UpdateTitleAndStatus();
+            try { await _network.SendAsync(new { Type = "UpdateProfile", Payload = new { UserName = _userName } }); }
+            catch (Exception ex) { MessageBox.Show($"Не удалось обновить имя на сервере: {ex.Message}"); }
+        }
+    }
+
+    private async void ChangeServerAddress_Click(object sender, RoutedEventArgs e)
+    {
+        string? newAddress = ShowInputDialog("Адрес сервера (ip:port)", _serverAddress);
+        if (string.IsNullOrWhiteSpace(newAddress)) return;
+
+        _serverAddress = newAddress.Trim();
+        SaveConfig();
+
+        try
+        {
+            _network.Disconnect();
+            var parts = _serverAddress.Split(':');
+            await _network.ConnectAsync(parts[0], int.Parse(parts[1]));
+            await _network.SendAsync(new { Type = "Hello", Payload = new HelloPayload { ClientId = _clientId } });
+            await RequestContactsAsync();
+            UpdateTitleAndStatus();
+            MessageBox.Show("Подключение к серверу выполнено успешно.", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Не удалось подключиться к серверу {_serverAddress}:\n{ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
@@ -745,19 +901,4 @@ public partial class MainWindow : Window
         dialog.ShowDialog();
         return result == true ? textBox.Text : null;
     }
-}
-
-public class ContactItem : INotifyPropertyChanged
-{
-    private string _name;
-    public int Id { get; set; }
-    public string Name
-    {
-        get => _name;
-        set { _name = value; OnPropertyChanged(nameof(Name)); }
-    }
-    public string StatusText { get; set; } = "";
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-    protected void OnPropertyChanged(string prop) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(prop));
 }

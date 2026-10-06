@@ -1,14 +1,12 @@
 ﻿using System.Collections.Generic;
 
-namespace SecureChat.Client;
+namespace SecureChat.Client.Services;
 
-// Хранит сессионные ключи для каждого собеседника и историю сообщений
+// Хранит сессионные ключи для каждого собеседника и историю сообщений.
 public class DialogManager
 {
     private readonly CryptoService _crypto;
-    // ключ: собеседник (int), значение: симметричный ключ (byte[])
     private Dictionary<int, byte[]> _sessionKeys = new();
-    // история: ключ – собеседник, значение – список сообщений
     private Dictionary<int, List<Models.DialogMessage>> _history = new();
 
     public DialogManager(CryptoService crypto)
@@ -16,6 +14,7 @@ public class DialogManager
         _crypto = crypto;
     }
 
+    // Возвращает существующий сессионный ключ или создаёт новый.
     public byte[] GetOrCreateSessionKey(int contactId)
     {
         if (_sessionKeys.TryGetValue(contactId, out var key))
@@ -25,17 +24,20 @@ public class DialogManager
         return key;
     }
 
-    public byte[] GetSessionKey(int contactId)
+    // Получить сессионный ключ (может быть null).
+    public byte[]? GetSessionKey(int contactId)
     {
         _sessionKeys.TryGetValue(contactId, out var key);
         return key;
     }
 
+    // Задать сессионный ключ.
     public void SetSessionKey(int contactId, byte[] key)
     {
         _sessionKeys[contactId] = key;
     }
 
+    // Добавить сообщение в историю.
     public void AddMessage(int contactId, Models.DialogMessage msg)
     {
         if (!_history.ContainsKey(contactId))
@@ -43,6 +45,7 @@ public class DialogManager
         _history[contactId].Add(msg);
     }
 
+    // Получить историю сообщений с контактом.
     public List<Models.DialogMessage> GetHistory(int contactId)
     {
         _history.TryGetValue(contactId, out var list);

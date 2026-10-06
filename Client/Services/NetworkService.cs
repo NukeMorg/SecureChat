@@ -6,16 +6,16 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using SecureChat.Common;
 
-namespace SecureChat.Client;
+namespace SecureChat.Client.Services;
 
+// Сетевое взаимодействие с сервером: подключение, отправка, приём сообщений.
 public class NetworkService
 {
     private TcpClient? _tcp;
     private NetworkStream? _stream;
-    private StreamReader? _reader;
-    private StreamWriter? _writer;
     private volatile bool _isDisconnecting;
 
+    // События для уведомления UI
     public event Action<IncomingMessagePayload>? OnIncomingMessage;
     public event Action<DeliveryStatusPayload>? OnDeliveryStatus;
     public event Action<PublicKeyResponsePayload>? OnPublicKeyResponse;
@@ -28,9 +28,13 @@ public class NetworkService
     public event Action? OnConnected;
     public event Action? OnDisconnected;
     public event Action<int>? OnRegisterResponse;
+    public event Action<AddContactResponsePayload>? OnAddContactResponse;
+    public event Action<int>? OnUserOnline;
+    public event Action<int>? OnUserOffline;
 
     public bool IsConnected => _tcp?.Connected ?? false;
 
+    // Подключение к серверу
     public async Task ConnectAsync(string host, int port)
     {
         _isDisconnecting = false;
@@ -39,8 +43,6 @@ public class NetworkService
             _tcp = new TcpClient();
             await _tcp.ConnectAsync(host, port);
             _stream = _tcp.GetStream();
-            _reader = new StreamReader(_stream);
-            _writer = new StreamWriter(_stream) { AutoFlush = true };
             OnConnected?.Invoke();
             _ = Task.Run(ReadLoop);
         }
@@ -58,6 +60,7 @@ public class NetworkService
         }
     }
 
+    // Отправка сообщения на сервер
     public async Task SendAsync(object message)
     {
         if (_stream == null || !_tcp!.Connected)
@@ -79,6 +82,7 @@ public class NetworkService
         }
     }
 
+    // Цикл чтения сообщений от сервера
     private async Task ReadLoop()
     {
         try
@@ -91,15 +95,16 @@ public class NetworkService
                 int len = BitConverter.ToInt32(lenBuf, 0);
                 if (len <= 0 || len > 100 * 1024 * 1024) break;
 
-                char[] buf = new char[len];
+                byte[] jsonBytes = new byte[len];
                 int total = 0;
                 while (total < len)
                 {
-                    int r = await _reader!.ReadAsync(buf, total, len - total);
+                    int r = await _stream.ReadAsync(jsonBytes, total, len - total);
                     if (r == 0) break;
                     total += r;
                 }
-                string json = new(buf, 0, total);
+                string json = Encoding.UTF8.GetString(jsonBytes, 0, total);
+
                 var msg = JsonSerializer.Deserialize<BaseMessage>(json);
                 if (msg == null) continue;
 
@@ -133,6 +138,17 @@ public class NetworkService
                         var reg = msg.Payload.Deserialize<RegisterResponsePayload>();
                         OnRegisterResponse?.Invoke(reg.AssignedId);
                         break;
+                    case "AddContactResponse":
+                        OnAddContactResponse?.Invoke(msg.Payload.Deserialize<AddContactResponsePayload>());
+                        break;
+                    case "UserOnline":
+                        var online = msg.Payload.Deserialize<OnlineStatusPayload>();
+                        OnUserOnline?.Invoke(online.UserId);
+                        break;
+                    case "UserOffline":
+                        var offline = msg.Payload.Deserialize<OnlineStatusPayload>();
+                        OnUserOffline?.Invoke(offline.UserId);
+                        break;
                     case "Error":
                         var err = msg.Payload.Deserialize<SimpleStatusPayload>();
                         OnError?.Invoke(err.Status);
@@ -152,11 +168,10 @@ public class NetworkService
         }
     }
 
+    // Закрытие соединения
     public void Disconnect()
     {
         _isDisconnecting = true;
-        try { _writer?.Close(); } catch { }
-        try { _reader?.Close(); } catch { }
         try { _stream?.Close(); } catch { }
         try { _tcp?.Close(); } catch { }
     }

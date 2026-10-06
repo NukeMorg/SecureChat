@@ -1,45 +1,48 @@
 ﻿using System.Security.Cryptography;
-using System.Text;
 
-namespace SecureChat.Client;
+namespace SecureChat.Client.Services;
 
+// Криптографические операции: RSA, AES-GCM, генерация сессионного ключа.
 public class CryptoService
 {
+    // Генерация пары RSA-2048 (публичный и приватный ключи в PEM).
     public (string publicKey, string privateKey) GenerateRsaKeyPair()
     {
         using var rsa = RSA.Create(2048);
-        string pub = rsa.ToXmlString(false);   // для передачи используем PEM? Для простоты используем XML, потом преобразуем.
-        string priv = rsa.ToXmlString(true);
-        // Конвертируем в PEM для совместимости? Оставим XML.
+        string pub = rsa.ExportRSAPublicKeyPem();
+        string priv = rsa.ExportRSAPrivateKeyPem();
         return (pub, priv);
     }
 
-    public byte[] RsaEncrypt(string publicKeyXml, byte[] data)
+    // Шифрование данных публичным RSA-ключом.
+    public byte[] RsaEncrypt(string publicKeyPem, byte[] data)
     {
         using var rsa = RSA.Create();
-        rsa.FromXmlString(publicKeyXml);
+        rsa.ImportFromPem(publicKeyPem);
         return rsa.Encrypt(data, RSAEncryptionPadding.Pkcs1);
     }
 
-    public byte[] RsaDecrypt(string privateKeyXml, byte[] data)
+    // Расшифровка приватным RSA-ключом.
+    public byte[] RsaDecrypt(string privateKeyPem, byte[] data)
     {
         using var rsa = RSA.Create();
-        rsa.FromXmlString(privateKeyXml);
+        rsa.ImportFromPem(privateKeyPem);
         return rsa.Decrypt(data, RSAEncryptionPadding.Pkcs1);
     }
 
+    // Шифрование AES-256-GCM. Возвращает ciphertext, nonce, tag.
     public (byte[] ciphertext, byte[] nonce, byte[] tag) AesGcmEncrypt(byte[] key, byte[] plaintext)
     {
-        byte[] nonce = new byte[12]; // 96-bit nonce for GCM
+        byte[] nonce = new byte[12];
         RandomNumberGenerator.Fill(nonce);
         byte[] ciphertext = new byte[plaintext.Length];
-        byte[] tag = new byte[16]; // 128-bit authentication tag
-
+        byte[] tag = new byte[16];
         using var aes = new AesGcm(key);
         aes.Encrypt(nonce, plaintext, ciphertext, tag);
         return (ciphertext, nonce, tag);
     }
 
+    // Расшифровка AES-256-GCM.
     public byte[] AesGcmDecrypt(byte[] key, byte[] nonce, byte[] ciphertext, byte[] tag)
     {
         byte[] plaintext = new byte[ciphertext.Length];
@@ -48,9 +51,10 @@ public class CryptoService
         return plaintext;
     }
 
+    // Генерация случайного 256-битного сессионного ключа.
     public byte[] GenerateSessionKey()
     {
-        byte[] key = new byte[32]; // 256-bit
+        byte[] key = new byte[32];
         RandomNumberGenerator.Fill(key);
         return key;
     }

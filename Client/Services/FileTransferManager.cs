@@ -2,10 +2,10 @@
 using System.IO;
 using System.Threading.Tasks;
 using SecureChat.Common;
-using EncryptedData = SecureChat.Common.EncryptedData; // убираем конфликт
 
-namespace SecureChat.Client;
+namespace SecureChat.Client.Services;
 
+// Управление отправкой и получением файлов.
 public class FileTransferManager
 {
     private readonly CryptoService _crypto;
@@ -17,6 +17,7 @@ public class FileTransferManager
         _network = network;
     }
 
+    // Отправка файла: шифрует и отправляет как сообщение с ContentType "File".
     public async Task SendFileAsync(int receiverId, string filePath, byte[] sessionKey)
     {
         byte[] fileData = File.ReadAllBytes(filePath);
@@ -45,6 +46,7 @@ public class FileTransferManager
         });
     }
 
+    // Обработка входящего файла: расшифровывает и сохраняет в папку Downloads.
     public void HandleIncomingFile(IncomingMessagePayload msg, byte[] sessionKey, Action<string> onComplete)
     {
         if (msg.ContentType != "File") return;
@@ -54,7 +56,7 @@ public class FileTransferManager
         byte[] plain = _crypto.AesGcmDecrypt(sessionKey, nonce, cipher, tag);
 
         string downloads = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) + "\\Downloads\\";
-        string path = Path.Combine(downloads, msg.FileName ?? "received_file"); // мало ли null
+        string path = Path.Combine(downloads, msg.FileName ?? "received_file");
         File.WriteAllBytes(path, plain);
         onComplete?.Invoke(path);
     }
