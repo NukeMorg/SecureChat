@@ -1,4 +1,6 @@
-﻿using System;
+﻿using SecureChat.Client.Services;
+using SecureChat.Common;
+using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
@@ -7,7 +9,6 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using SecureChat.Common;
 
 namespace SecureChat.Server;
 
@@ -18,7 +19,10 @@ class Server
 {
     // Подключённые клиенты: UserId -> WebSocket
     static ConcurrentDictionary<int, WebSocket> clients = new();
+    // Персональные семафоры на сокет — защищают SendAsync от параллельных вызовов
+    static ConcurrentDictionary<WebSocket, SemaphoreSlim> socketLocks = new();
     static Database db = new();
+    static EmailService emailService = new();
 
     static async Task Main()
     {
@@ -35,7 +39,7 @@ class Server
         catch (Exception ex)
         {
             // Фолбэк на localhost, если нет прав на привязку к *
-            Console.WriteLine($"Предупреждение: привязка к ws://*:9000/ не удалась ({ex.Message}). Запуск на ws://localhost:9000/");
+            Console.WriteLine($"Предупреждение: {ex.Message}. Запуск на ws://localhost:9000/");
             listener = new HttpListener();
             listener.Prefixes.Add("http://localhost:9000/");
             listener.Start();
@@ -69,7 +73,7 @@ class Server
                 }
                 else
                 {
-                    // Обычный HTTP-запрос — отдаём health-check строку
+                    // Обычный HTTP-запрос — health-check строка
                     byte[] response = Encoding.UTF8.GetBytes("SecureChat WebSocket Server is Running");
                     context.Response.ContentType = "text/plain; charset=utf-8";
                     context.Response.ContentLength64 = response.Length;
@@ -91,6 +95,8 @@ class Server
     {
         int? clientId = null;
         byte[] buffer = new byte[64 * 1024];
+        // Создаём семафор для этого сокета (для безопасной параллельной отправки)
+        socketLocks[ws] = new SemaphoreSlim(1, 1);
 
         try
         {
@@ -117,6 +123,9 @@ class Server
                 // Маршрутизация запросов (обработчики с clientId требуют авторизации)
                 switch (msg.Type)
                 {
+                    case "SendEmailCode":
+                        await ProcessSendEmailCode(msg, ws);
+                        break;
                     case "Login":
                         clientId = await ProcessLogin(msg, ws);
                         break;
@@ -169,7 +178,41 @@ class Server
                 _ = Task.Run(async () =>
                     await BroadcastExcept(clientId.Value, new { Type = "UserOffline", Payload = new OnlineStatusPayload { UserId = clientId.Value } }));
             }
+
+            // Освобождаем семафор сокета
+            if (socketLocks.TryRemove(ws, out var sem))
+            {
+                sem.Dispose();
+            }
+
             try { ws.Dispose(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Генерация и отправка кода подтверждения на email.
+    /// </summary>
+    static async Task ProcessSendEmailCode(BaseMessage msg, WebSocket ws)
+    {
+        var p = msg.Payload.Deserialize<SendEmailCodePayload>();
+        if (p == null || string.IsNullOrWhiteSpace(p.Email) || !p.Email.Contains('@'))
+        {
+            await Send(ws, new { Type = "SendEmailCodeResponse", Payload = new SendEmailCodeResponsePayload { Status = "InvalidEmail", Message = "Некорректный адрес почты." } });
+            return;
+        }
+
+        string code = emailService.GenerateVerificationCode();
+        // Код живёт 10 минут
+        db.SaveVerificationCode(p.Email, code, TimeSpan.FromMinutes(10));
+
+        bool sent = await emailService.SendVerificationCodeAsync(p.Email, code);
+        if (sent)
+        {
+            await Send(ws, new { Type = "SendEmailCodeResponse", Payload = new SendEmailCodeResponsePayload { Status = "Ok", Message = "Код подтверждения отправлен на почту." } });
+        }
+        else
+        {
+            await Send(ws, new { Type = "SendEmailCodeResponse", Payload = new SendEmailCodeResponsePayload { Status = "SendFailed", Message = "Не удалось отправить письмо. Проверьте адрес или консоль сервера." } });
         }
     }
 
@@ -201,6 +244,7 @@ class Server
         clients[userId] = ws;
         Console.WriteLine($"Успешный вход: {p.Email} (ID: {userId})");
 
+        // Сначала ответ клиенту
         await Send(ws, new
         {
             Type = "LoginResponse",
@@ -213,12 +257,13 @@ class Server
             }
         });
 
+        // Затем рассылаем онлайн-статусы
         await NotifyOnlineStatus(userId, ws);
         return userId;
     }
 
     /// <summary>
-    /// Регистрирует новый аккаунт и сразу авторизует его.
+    /// Регистрация: сначала проверяем код из письма, затем создаём аккаунт.
     /// </summary>
     static async Task<int?> ProcessRegisterAccount(BaseMessage msg, WebSocket ws)
     {
@@ -231,14 +276,22 @@ class Server
 
         Console.WriteLine($"Запрос на регистрацию: {p.Email}");
 
-        // Простая валидация email
-        if (!p.Email.Contains('@') || !p.Email.Contains('.'))
+        // 1. Проверяем код подтверждения почты (одноразовый)
+        var verifyResult = db.VerifyAndConsumeCode(p.Email, p.Code);
+        if (verifyResult == Database.CodeVerifyResult.Invalid)
         {
-            Console.WriteLine($"Некорректный email: {p.Email}");
-            await Send(ws, new { Type = "RegisterAccountResponse", Payload = new RegisterAccountResponsePayload { Status = "InvalidEmail" } });
+            Console.WriteLine($"Неверный код для: {p.Email}");
+            await Send(ws, new { Type = "RegisterAccountResponse", Payload = new RegisterAccountResponsePayload { Status = "InvalidCode" } });
+            return null;
+        }
+        if (verifyResult == Database.CodeVerifyResult.Expired)
+        {
+            Console.WriteLine($"Срок действия кода истек для: {p.Email}");
+            await Send(ws, new { Type = "RegisterAccountResponse", Payload = new RegisterAccountResponsePayload { Status = "CodeExpired" } });
             return null;
         }
 
+        // 2. Создаём учётную запись
         var regResult = db.RegisterUser(p.Email, p.Password, p.UserName, p.PublicKey);
         if (regResult == null)
         {
@@ -251,7 +304,7 @@ class Server
         string token = regResult.Value.token;
 
         clients[userId] = ws;
-        Console.WriteLine($"Зарегистрирован новый пользователь ID: {userId}, Email: {p.Email}");
+        Console.WriteLine($"Зарегистрирован и подтвержден новый пользователь ID: {userId}, Email: {p.Email}");
 
         await Send(ws, new
         {
@@ -407,6 +460,7 @@ class Server
             "Sent",
             p.EncryptedKeySelf
         );
+        // Автоматически добавляем получателя в контакты
         db.AddContact(senderId, p.ReceiverId);
 
         // Получатель не в сети — уведомляем отправителя
@@ -519,12 +573,27 @@ class Server
 
     /// <summary>
     /// Сериализует объект в JSON и отправляет как текстовый WebSocket-фрейм.
+    /// Отправка сериализуется семафором сокета (SendAsync нельзя вызывать параллельно).
     /// </summary>
     static async Task Send(WebSocket ws, object obj)
     {
         if (ws.State != WebSocketState.Open) return;
-        string json = JsonSerializer.Serialize(obj);
-        byte[] bytes = Encoding.UTF8.GetBytes(json);
-        await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+
+        if (socketLocks.TryGetValue(ws, out var sem))
+        {
+            await sem.WaitAsync();
+            try
+            {
+                // Повторная проверка после семафора — сокет мог закрыться
+                if (ws.State != WebSocketState.Open) return;
+                string json = JsonSerializer.Serialize(obj);
+                byte[] bytes = Encoding.UTF8.GetBytes(json);
+                await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            finally
+            {
+                sem.Release();
+            }
+        }
     }
 }

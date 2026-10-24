@@ -22,6 +22,7 @@ public class NetworkService
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     // События, на которые подписываются окна/логика
+    public event Action<SendEmailCodeResponsePayload>? OnSendEmailCodeResponse;
     public event Action<IncomingMessagePayload>? OnIncomingMessage;
     public event Action<DeliveryStatusPayload>? OnDeliveryStatus;
     public event Action<PublicKeyResponsePayload>? OnPublicKeyResponse;
@@ -140,6 +141,9 @@ public class NetworkService
                 // Диспетчеризация по типу сообщения
                 switch (msg.Type)
                 {
+                    case "SendEmailCodeResponse":
+                        OnSendEmailCodeResponse?.Invoke(msg.Payload.Deserialize<SendEmailCodeResponsePayload>()!);
+                        break;
                     case "LoginResponse":
                         OnLoginResponse?.Invoke(msg.Payload.Deserialize<LoginResponsePayload>()!);
                         break;
@@ -196,8 +200,8 @@ public class NetworkService
         finally
         {
             // Сообщаем подписчикам, что соединение завершилось.
-            // Повторный Disconnect() здесь не нужен: отключение уже выполнено снаружи
-            // (или закроется при следующем ConnectAsync — он начинается с Disconnect()).
+            // Повторный Disconnect() здесь не нужен — он уже выполнен снаружи (или будет
+            // вызван в начале следующего ConnectAsync()).
             OnDisconnected?.Invoke();
         }
     }
