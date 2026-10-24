@@ -1,31 +1,24 @@
 ﻿using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Security.Cryptography;
 using SecureChat.Common;
+using Serilog;
 
 namespace SecureChat.Server;
 
-/// <summary>
-/// SQLite-база сервера: пользователи, сессии, коды подтверждения email, сообщения, контакты.
-/// Настроена на многопоточную работу (WAL + busy_timeout).
-/// </summary>
 public class Database
 {
-    // Default Timeout = 10 сек ожидания освобождения БД перед ошибкой "database is locked"
     readonly string cs = "Data Source=server.db;Default Timeout=10;";
     public string ConnectionString => cs;
+    private static readonly ILogger Log = Serilog.Log.ForContext<Database>();
 
-    /// <summary>
-    /// Создаёт таблицы и включает WAL/busy_timeout. Старые БД совместимы через CREATE IF NOT EXISTS.
-    /// </summary>
     public void Initialize()
     {
         using var conn = new SqliteConnection(cs);
         conn.Open();
         var cmd = conn.CreateCommand();
-
-        // WAL — параллельное чтение/запись; busy_timeout — ждать блокировку, а не падать
         cmd.CommandText = @"
             PRAGMA journal_mode = WAL;
             PRAGMA busy_timeout = 5000;
@@ -75,13 +68,17 @@ public class Database
                 PRIMARY KEY (UserId, ContactId),
                 FOREIGN KEY (UserId) REFERENCES Clients(Id),
                 FOREIGN KEY (ContactId) REFERENCES Clients(Id)
-            );";
+            );
+            CREATE TABLE IF NOT EXISTS EmailRateLimits (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Email TEXT NOT NULL,
+                LastSentAt TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_email_rate ON EmailRateLimits(Email, LastSentAt);";
         cmd.ExecuteNonQuery();
+        Log.Information("База данных инициализирована: {DbPath}", Path.GetFullPath("server.db"));
     }
 
-    /// <summary>
-    /// Сохраняет/перезаписывает код подтверждения для email (UPSERT по Email).
-    /// </summary>
     public void SaveVerificationCode(string email, string code, TimeSpan ttl)
     {
         string normEmail = email.Trim().ToLowerInvariant();
@@ -98,20 +95,8 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    /// <summary>
-    /// Результат проверки кода подтверждения.
-    /// </summary>
-    public enum CodeVerifyResult
-    {
-        Valid,
-        Invalid,
-        Expired
-    }
+    public enum CodeVerifyResult { Valid, Invalid, Expired }
 
-    /// <summary>
-    /// Проверяет код и удаляет его при успехе (одноразовый).
-    /// Просроченный код тоже удаляется.
-    /// </summary>
     public CodeVerifyResult VerifyAndConsumeCode(string email, string code)
     {
         string normEmail = email.Trim().ToLowerInvariant();
@@ -126,29 +111,19 @@ public class Database
         string savedCode = reader.GetString(0);
         DateTime expiresAt = DateTime.Parse(reader.GetString(1));
 
-        // Срок истёк — удаляем и сообщаем об этом
         if (DateTime.UtcNow > expiresAt)
         {
             reader.Close();
             DeleteVerificationCode(normEmail);
             return CodeVerifyResult.Expired;
         }
+        if (savedCode != code.Trim()) return CodeVerifyResult.Invalid;
 
-        // Код не совпал — оставляем запись (можно повторить попытку)
-        if (savedCode != code.Trim())
-        {
-            return CodeVerifyResult.Invalid;
-        }
-
-        // Успех — код одноразовый
         reader.Close();
         DeleteVerificationCode(normEmail);
         return CodeVerifyResult.Valid;
     }
 
-    /// <summary>
-    /// Удаляет сохранённый код подтверждения для email.
-    /// </summary>
     private void DeleteVerificationCode(string email)
     {
         using var conn = new SqliteConnection(cs);
@@ -159,22 +134,39 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    /// <summary>
-    /// PBKDF2-SHA256: возвращает Base64-хеш и Base64-соль.
-    /// </summary>
+    public bool TryReserveEmailSend(string email, TimeSpan window, int maxAttempts)
+    {
+        string normEmail = email.Trim().ToLowerInvariant();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+
+        using (var cleanCmd = conn.CreateCommand())
+        {
+            cleanCmd.CommandText = "DELETE FROM EmailRateLimits WHERE LastSentAt < @cutoff";
+            cleanCmd.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.Subtract(window).ToString("o"));
+            cleanCmd.ExecuteNonQuery();
+        }
+
+        using var insertCmd = conn.CreateCommand();
+        insertCmd.CommandText = @"
+            INSERT INTO EmailRateLimits (Email, LastSentAt)
+            SELECT @email, @time
+            WHERE (SELECT COUNT(*) FROM EmailRateLimits WHERE Email = @email) < @max";
+        insertCmd.Parameters.AddWithValue("@email", normEmail);
+        insertCmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        insertCmd.Parameters.AddWithValue("@max", maxAttempts);
+        return insertCmd.ExecuteNonQuery() > 0;
+    }
+
     public static (string hash, string salt) HashPassword(string password)
     {
         byte[] saltBytes = RandomNumberGenerator.GetBytes(16);
         string salt = Convert.ToBase64String(saltBytes);
         using var pbkdf2 = new Rfc2898DeriveBytes(password, saltBytes, 10000, HashAlgorithmName.SHA256);
         byte[] hashBytes = pbkdf2.GetBytes(32);
-        string hash = Convert.ToBase64String(hashBytes);
-        return (hash, salt);
+        return (Convert.ToBase64String(hashBytes), salt);
     }
 
-    /// <summary>
-    /// Проверяет пароль по сохранённым хешу и соли.
-    /// </summary>
     public static bool VerifyPassword(string password, string storedHash, string storedSalt)
     {
         byte[] saltBytes = Convert.FromBase64String(storedSalt);
@@ -183,16 +175,12 @@ public class Database
         return Convert.ToBase64String(hashBytes) == storedHash;
     }
 
-    /// <summary>
-    /// Регистрирует пользователя и сразу создаёт сессию. null — email уже занят.
-    /// </summary>
     public (int id, string token)? RegisterUser(string email, string password, string userName, string publicKey)
     {
         string normEmail = email.Trim().ToLowerInvariant();
         using var conn = new SqliteConnection(cs);
         conn.Open();
 
-        // Проверка уникальности email (без учёта регистра)
         var checkCmd = conn.CreateCommand();
         checkCmd.CommandText = "SELECT COUNT(*) FROM Clients WHERE LOWER(Email) = @email";
         checkCmd.Parameters.AddWithValue("@email", normEmail);
@@ -212,12 +200,10 @@ public class Database
 
         int id = Convert.ToInt32(insertCmd.ExecuteScalar());
         string token = CreateSessionInternal(conn, id);
+        Log.Debug("RegisterUser создан userId={UserId}", id);
         return (id, token);
     }
 
-    /// <summary>
-    /// Проверяет логин/пароль и создаёт сессию. null — неверные данные.
-    /// </summary>
     public (int id, string name, string token)? Authenticate(string email, string password)
     {
         string normEmail = email.Trim().ToLowerInvariant();
@@ -235,18 +221,15 @@ public class Database
             string salt = reader.GetString(3);
             if (VerifyPassword(password, hash, salt))
             {
-                // Закрываем reader, чтобы освободить соединение до INSERT сессии
                 reader.Close();
                 string token = CreateSessionInternal(conn, id);
+                Log.Debug("Authenticate успешен для userId={UserId}", id);
                 return (id, name, token);
             }
         }
         return null;
     }
 
-    /// <summary>
-    /// Создаёт сессию в рамках уже открытого соединения (для транзакционных методов).
-    /// </summary>
     private string CreateSessionInternal(SqliteConnection conn, int userId)
     {
         string token = Guid.NewGuid().ToString("N");
@@ -259,9 +242,6 @@ public class Database
         return token;
     }
 
-    /// <summary>
-    /// Публичный вариант создания сессии — открывает соединение сам.
-    /// </summary>
     public string CreateSession(int userId)
     {
         using var conn = new SqliteConnection(cs);
@@ -269,9 +249,6 @@ public class Database
         return CreateSessionInternal(conn, userId);
     }
 
-    /// <summary>
-    /// Возвращает UserId по токену или null, если сессии нет.
-    /// </summary>
     public int? ValidateSession(string token)
     {
         using var conn = new SqliteConnection(cs);
@@ -283,9 +260,6 @@ public class Database
         return result != null ? Convert.ToInt32(result) : null;
     }
 
-    /// <summary>
-    /// Есть ли пользователь с таким Id.
-    /// </summary>
     public bool UserExists(int id)
     {
         using var conn = new SqliteConnection(cs);
@@ -296,9 +270,6 @@ public class Database
         return (long)cmd.ExecuteScalar()! > 0;
     }
 
-    /// <summary>
-    /// Публичный ключ пользователя (PEM) или null.
-    /// </summary>
     public string? GetPublicKey(int id)
     {
         using var conn = new SqliteConnection(cs);
@@ -309,9 +280,6 @@ public class Database
         return cmd.ExecuteScalar() as string;
     }
 
-    /// <summary>
-    /// Обновляет отображаемое имя пользователя.
-    /// </summary>
     public void UpdateUserName(int id, string userName)
     {
         using var conn = new SqliteConnection(cs);
@@ -323,9 +291,6 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    /// <summary>
-    /// Возвращает UserName по Id или null.
-    /// </summary>
     public string? GetUserName(int id)
     {
         using var conn = new SqliteConnection(cs);
@@ -336,23 +301,33 @@ public class Database
         return cmd.ExecuteScalar() as string;
     }
 
-    /// <summary>
-    /// Сохраняет (или перезаписывает по MessageId) сообщение.
-    /// </summary>
     public void SaveMessage(string messageId, int senderId, int receiverId,
                             string? encryptedKey, string? nonce, string? ciphertext, string? tag,
                             string contentType, string? fileName, long fileSize, string? fileTransferId,
                             string status = "Sent", string? encryptedKeySelf = null)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         using var conn = new SqliteConnection(cs);
         conn.Open();
         var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-            INSERT OR REPLACE INTO Messages
+            INSERT INTO Messages
             (MessageId, SenderId, ReceiverId, EncryptedKey, Nonce, Ciphertext, Tag,
              ContentType, FileName, FileSize, FileTransferId, Timestamp, Status, EncryptedKeySelf)
             VALUES (@msgId, @sender, @receiver, @encKey, @nonce, @ct, @tag,
-                    @ctype, @fname, @fsize, @ftransfer, @time, @status, @encKeySelf)";
+                    @ctype, @fname, @fsize, @ftransfer, @time, @status, @encKeySelf)
+            ON CONFLICT(MessageId) DO UPDATE SET
+                EncryptedKey = excluded.EncryptedKey,
+                EncryptedKeySelf = excluded.EncryptedKeySelf,
+                Nonce = excluded.Nonce,
+                Ciphertext = excluded.Ciphertext,
+                Tag = excluded.Tag,
+                ContentType = excluded.ContentType,
+                FileName = excluded.FileName,
+                FileSize = excluded.FileSize,
+                FileTransferId = excluded.FileTransferId,
+                Timestamp = excluded.Timestamp,
+                Status = excluded.Status";
         cmd.Parameters.AddWithValue("@msgId", messageId);
         cmd.Parameters.AddWithValue("@sender", senderId);
         cmd.Parameters.AddWithValue("@receiver", receiverId);
@@ -368,11 +343,11 @@ public class Database
         cmd.Parameters.AddWithValue("@status", status);
         cmd.Parameters.AddWithValue("@encKeySelf", (object?)encryptedKeySelf ?? DBNull.Value);
         cmd.ExecuteNonQuery();
+        sw.Stop();
+        if (sw.ElapsedMilliseconds > 100)
+            Log.Warning("SaveMessage медленно: {DurationMs}ms messageId={MessageId}", sw.ElapsedMilliseconds, messageId);
     }
 
-    /// <summary>
-    /// Обновляет статус сообщения (Sent / Delivered / Read).
-    /// </summary>
     public void UpdateMessageStatus(string messageId, string status)
     {
         using var conn = new SqliteConnection(cs);
@@ -384,9 +359,6 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    /// <summary>
-    /// Возвращает отправителя по MessageId (для подтверждений) или null.
-    /// </summary>
     public int? GetSenderByMessageId(string messageId)
     {
         using var conn = new SqliteConnection(cs);
@@ -398,9 +370,6 @@ public class Database
         return result != null ? Convert.ToInt32(result) : null;
     }
 
-    /// <summary>
-    /// История переписки между двумя пользователями в хронологическом порядке.
-    /// </summary>
     public List<HistoryMessage> GetHistory(int userId1, int userId2)
     {
         var list = new List<HistoryMessage>();
@@ -437,25 +406,59 @@ public class Database
                 Status = reader.GetString(13)
             });
         }
+        Log.Debug("GetHistory user1={U1} user2={U2} count={Count}", userId1, userId2, list.Count);
         return list;
     }
 
-    /// <summary>
-    /// Добавляет контакт в обе стороны (симметрично).
-    /// </summary>
+    public List<HistoryMessage> GetPendingMessages(int receiverId)
+    {
+        var list = new List<HistoryMessage>();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT MessageId, SenderId, ReceiverId, EncryptedKey, EncryptedKeySelf,
+                   Nonce, Ciphertext, Tag, ContentType, FileName, FileSize,
+                   FileTransferId, Timestamp, Status
+            FROM Messages
+            WHERE ReceiverId = @uid AND Status = 'Sent'
+            ORDER BY Timestamp ASC";
+        cmd.Parameters.AddWithValue("@uid", receiverId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new HistoryMessage
+            {
+                MessageId = reader.GetString(0),
+                SenderId = reader.GetInt32(1),
+                ReceiverId = reader.GetInt32(2),
+                EncryptedKey = reader.IsDBNull(3) ? null : reader.GetString(3),
+                EncryptedKeySelf = reader.IsDBNull(4) ? null : reader.GetString(4),
+                Nonce = reader.IsDBNull(5) ? null : reader.GetString(5),
+                Ciphertext = reader.IsDBNull(6) ? null : reader.GetString(6),
+                Tag = reader.IsDBNull(7) ? null : reader.GetString(7),
+                ContentType = reader.GetString(8),
+                FileName = reader.IsDBNull(9) ? null : reader.GetString(9),
+                FileSize = reader.GetInt64(10),
+                FileTransferId = reader.IsDBNull(11) ? null : reader.GetString(11),
+                Timestamp = reader.GetString(12),
+                Status = reader.GetString(13)
+            });
+        }
+        return list;
+    }
+
     public void AddContact(int userId, int contactId)
     {
         using var conn = new SqliteConnection(cs);
         conn.Open();
         var cmd = conn.CreateCommand();
 
-        // Прямая связь
         cmd.CommandText = "INSERT OR IGNORE INTO Contacts (UserId, ContactId) VALUES (@uid, @cid)";
         cmd.Parameters.AddWithValue("@uid", userId);
         cmd.Parameters.AddWithValue("@cid", contactId);
         cmd.ExecuteNonQuery();
 
-        // Обратная связь
         cmd.CommandText = "INSERT OR IGNORE INTO Contacts (UserId, ContactId) VALUES (@uid2, @cid2)";
         cmd.Parameters.Clear();
         cmd.Parameters.AddWithValue("@uid2", contactId);
@@ -463,9 +466,6 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    /// <summary>
-    /// Список Id контактов пользователя.
-    /// </summary>
     public List<int> GetContactIds(int userId)
     {
         var ids = new List<int>();

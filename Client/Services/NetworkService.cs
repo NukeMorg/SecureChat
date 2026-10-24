@@ -6,22 +6,19 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using SecureChat.Common;
+using Serilog;
 
 namespace SecureChat.Client.Services;
 
-/// <summary>
-/// Сетевое взаимодействие через WebSocket: подключение, отправка, приём и диспетчеризация событий.
-/// </summary>
 public class NetworkService
 {
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _cts;
-    // Флаг "мы сами инициировали отключение" — чтобы не спамить OnError при штатном закрытии
     private volatile bool _isDisconnecting;
-    // Семафор на отправку: ClientWebSocket не поддерживает параллельные SendAsync
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
-    // События, на которые подписываются окна/логика
+    private static readonly ILogger Log = Serilog.Log.ForContext<NetworkService>();
+
     public event Action<SendEmailCodeResponsePayload>? OnSendEmailCodeResponse;
     public event Action<IncomingMessagePayload>? OnIncomingMessage;
     public event Action<DeliveryStatusPayload>? OnDeliveryStatus;
@@ -42,9 +39,6 @@ public class NetworkService
 
     public bool IsConnected => _ws != null && _ws.State == WebSocketState.Open;
 
-    /// <summary>
-    /// Устанавливает соединение, нормализует URL и запускает цикл чтения.
-    /// </summary>
     public async Task ConnectAsync(string serverUrl)
     {
         if (IsConnected) return;
@@ -53,36 +47,30 @@ public class NetworkService
         _isDisconnecting = false;
         _cts = new CancellationTokenSource();
 
-        // Приводим адрес к виду ws://host:port/ (можно передавать без схемы/слэша)
         string normalizedUrl = serverUrl.Trim();
         if (!normalizedUrl.StartsWith("ws://") && !normalizedUrl.StartsWith("wss://"))
-        {
             normalizedUrl = "ws://" + normalizedUrl;
-        }
         if (!normalizedUrl.EndsWith("/"))
-        {
             normalizedUrl += "/";
-        }
 
         try
         {
+            Log.Information("Подключение к {Url}", normalizedUrl);
             _ws = new ClientWebSocket();
             await _ws.ConnectAsync(new Uri(normalizedUrl), _cts.Token);
+            Log.Information("Соединение установлено {Url}", normalizedUrl);
             OnConnected?.Invoke();
-            // Чтение — в фоне, чтобы не блокировать вызывающий код
             _ = Task.Run(ReadLoop);
         }
         catch (Exception ex)
         {
+            Log.Error(ex, "Ошибка подключения к {Url}", normalizedUrl);
             OnError?.Invoke($"Ошибка подключения к {normalizedUrl}: {ex.Message}");
             Disconnect();
             throw;
         }
     }
 
-    /// <summary>
-    /// Отправляет объект как JSON через WebSocket (под семафором, т.к. SendAsync не параллелится).
-    /// </summary>
     public async Task SendAsync(object message)
     {
         if (_ws == null || _ws.State != WebSocketState.Open)
@@ -94,7 +82,6 @@ public class NetworkService
         await _sendLock.WaitAsync();
         try
         {
-            // Повторная проверка после ожидания семафора — сокет мог закрыться
             if (_ws.State != WebSocketState.Open) return;
             string json = JsonSerializer.Serialize(message);
             byte[] bytes = Encoding.UTF8.GetBytes(json);
@@ -102,6 +89,7 @@ public class NetworkService
         }
         catch (Exception ex)
         {
+            if (!_isDisconnecting) Log.Error(ex, "Ошибка отправки сообщения");
             if (!_isDisconnecting) OnError?.Invoke($"Ошибка отправки: {ex.Message}");
         }
         finally
@@ -110,9 +98,6 @@ public class NetworkService
         }
     }
 
-    /// <summary>
-    /// Фоновый цикл чтения: склеивает фрагменты, парсит BaseMessage, вызывает события по Type.
-    /// </summary>
     private async Task ReadLoop()
     {
         byte[] buffer = new byte[64 * 1024];
@@ -120,7 +105,6 @@ public class NetworkService
         {
             while (_ws != null && _ws.State == WebSocketState.Open && !_cts!.Token.IsCancellationRequested)
             {
-                // Одно логическое сообщение может приходить несколькими фреймами
                 using var ms = new MemoryStream();
                 WebSocketReceiveResult result;
                 do
@@ -138,7 +122,6 @@ public class NetworkService
                 var msg = JsonSerializer.Deserialize<BaseMessage>(json);
                 if (msg == null) continue;
 
-                // Диспетчеризация по типу сообщения
                 switch (msg.Type)
                 {
                     case "SendEmailCodeResponse":
@@ -192,25 +175,22 @@ public class NetworkService
                 }
             }
         }
-        catch (OperationCanceledException) { } // штатная отмена через Disconnect()
+        catch (OperationCanceledException) { Log.Debug("ReadLoop отменён"); }
         catch (Exception ex)
         {
+            if (!_isDisconnecting) Log.Error(ex, "Ошибка сети WebSocket");
             if (!_isDisconnecting) OnError?.Invoke($"Ошибка сети WebSocket: {ex.Message}");
         }
         finally
         {
-            // Сообщаем подписчикам, что соединение завершилось.
-            // Повторный Disconnect() здесь не нужен — он уже выполнен снаружи (или будет
-            // вызван в начале следующего ConnectAsync()).
+            Log.Debug("ReadLoop завершён");
             OnDisconnected?.Invoke();
         }
     }
 
-    /// <summary>
-    /// Закрывает соединение по нашей инициативе и подавляет лишние OnError.
-    /// </summary>
     public void Disconnect()
     {
+        Log.Information("Отключение от сервера");
         _isDisconnecting = true;
         _cts?.Cancel();
         try { _ws?.Dispose(); } catch { }
