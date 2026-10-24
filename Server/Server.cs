@@ -1,235 +1,353 @@
-﻿using System.Net;
-using System.Net.Sockets;
+﻿using System;
 using System.Collections.Concurrent;
-using System.Text.Json;
+using System.IO;
+using System.Net;
+using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using SecureChat.Common;
-using Microsoft.Data.Sqlite;
 
 namespace SecureChat.Server;
 
-// Главный класс сервера: прослушивает TCP-порт 9000,
-// обрабатывает клиентов, маршрутизирует сообщения.
+// Сервер SecureChat на WebSocket (замена TcpListener) с корпоративной авторизацией
 class Server
 {
-    // Подключённые клиенты: ID -> StreamWriter для отправки
-    static ConcurrentDictionary<int, StreamWriter> clients = new();
-    static Database db = new();
+    static ConcurrentDictionary<int, WebSocket> clients = new();  // Активные подключения: userId -> ws
+    static Database db = new();                                   // Слой хранения данных
 
     static async Task Main()
     {
         db.Initialize();
-        var listener = new TcpListener(IPAddress.Any, 9000);
-        listener.Start();
-        Console.WriteLine("Сервер запущен на порту 9000");
 
+        // Привязка к порту 9000 (все интерфейсы + localhost)
+        var listener = new HttpListener();
+        listener.Prefixes.Add("http://*:9000/");
+        listener.Prefixes.Add("http://localhost:9000/");
+        try
+        {
+            listener.Start();
+            Console.WriteLine("WebSocket сервер SecureChat запущен на ws://*:9000/");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка запуска HttpListener: {ex.Message}");
+            // Fallback: только localhost
+            listener = new HttpListener();
+            listener.Prefixes.Add("http://localhost:9000/");
+            listener.Start();
+            Console.WriteLine("WebSocket сервер SecureChat запущен на ws://localhost:9000/");
+        }
 
+        // Основной цикл приёма HTTP-запросов
         while (true)
         {
-            var tcp = await listener.AcceptTcpClientAsync();
-            // Каждого клиента обрабатываем в отдельной задаче
-            _ = Task.Run(() => HandleClient(tcp));
+            try
+            {
+                var context = await listener.GetContextAsync();
+                if (context.Request.IsWebSocketRequest)
+                {
+                    // Апгрейд до WebSocket в отдельной задаче
+                    _ = Task.Run(async () =>
+                    {
+                        HttpListenerWebSocketContext wsContext;
+                        try
+                        {
+                            wsContext = await context.AcceptWebSocketAsync(subProtocol: null);
+                        }
+                        catch
+                        {
+                            context.Response.StatusCode = 500;
+                            context.Response.Close();
+                            return;
+                        }
+                        await HandleClient(wsContext.WebSocket);
+                    });
+                }
+                else
+                {
+                    // Простой healthcheck для HTTP
+                    byte[] response = Encoding.UTF8.GetBytes("SecureChat WebSocket Server is Running");
+                    context.Response.ContentType = "text/plain; charset=utf-8";
+                    context.Response.ContentLength64 = response.Length;
+                    await context.Response.OutputStream.WriteAsync(response, 0, response.Length);
+                    context.Response.Close();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка прослушивания соединений: {ex.Message}");
+            }
         }
     }
 
-    
-
-    // Обрабатывает одно TCP-соединение: читает сообщения в цикле,
-    // вызывает соответствующие обработчики по типу сообщения.
-    static async Task HandleClient(TcpClient tcp)
+    // Цикл обработки одного клиентского WS-соединения
+    static async Task HandleClient(WebSocket ws)
     {
-        var stream = tcp.GetStream();
-        var writer = new StreamWriter(stream) { AutoFlush = true };
         int? clientId = null;
+        byte[] buffer = new byte[64 * 1024];
 
         try
         {
-            while (tcp.Connected)
+            while (ws.State == WebSocketState.Open)
             {
-                // Читаем длину сообщения (4 байта)
-                byte[] lenBuf = new byte[4];
-                int read = await stream.ReadAsync(lenBuf, 0, 4);
-                if (read < 4) break;
-                int len = BitConverter.ToInt32(lenBuf, 0);
-                if (len <= 0 || len > 100 * 1024 * 1024) break; // защита от невалидных данных
-
-                // Читаем JSON сообщения
-                byte[] jsonBytes = new byte[len];
-                int total = 0;
-                while (total < len)
+                // Накопление фрагментированного сообщения
+                using var ms = new MemoryStream();
+                WebSocketReceiveResult result;
+                do
                 {
-                    int r = await stream.ReadAsync(jsonBytes, total, len - total);
-                    if (r == 0) break;
-                    total += r;
-                }
-                string json = Encoding.UTF8.GetString(jsonBytes, 0, total);
+                    result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                        return;
+                    }
+                    ms.Write(buffer, 0, result.Count);
+                } while (!result.EndOfMessage);
+
+                // Разбор конверта и маршрутизация по типу
+                string json = Encoding.UTF8.GetString(ms.ToArray());
                 var msg = JsonSerializer.Deserialize<BaseMessage>(json);
                 if (msg == null) continue;
 
-                // Маршрутизация по типу сообщения
                 switch (msg.Type)
                 {
-                    case "Register": await ProcessRegister(msg, writer); break;
+                    case "Login":
+                        clientId = await ProcessLogin(msg, ws);
+                        break;
+                    case "RegisterAccount":
+                        clientId = await ProcessRegisterAccount(msg, ws);
+                        break;
                     case "Hello":
-                        clientId = await ProcessHello(msg, writer, clientId);
-                        if (clientId != null) clients[clientId.Value] = writer;
+                        clientId = await ProcessHello(msg, ws, clientId);
                         break;
                     case "GetPublicKey" when clientId != null:
-                        await ProcessGetPublicKey(msg, writer); break;
+                        await ProcessGetPublicKey(msg, ws);
+                        break;
                     case "GetUserInfo" when clientId != null:
-                        await ProcessGetUserInfo(msg, writer); break;
+                        await ProcessGetUserInfo(msg, ws);
+                        break;
                     case "SendMessage" when clientId != null:
-                        await ProcessSendMessage(msg, clientId.Value, writer); break;
+                        await ProcessSendMessage(msg, clientId.Value, ws);
+                        break;
                     case "Ack" when clientId != null:
-                        await ProcessAck(msg); break;
+                        await ProcessAck(msg);
+                        break;
                     case "GetHistory" when clientId != null:
-                        await ProcessGetHistory(msg, clientId.Value, writer); break;
+                        await ProcessGetHistory(msg, clientId.Value, ws);
+                        break;
                     case "GetContacts" when clientId != null:
-                        await ProcessGetContacts(clientId.Value, writer); break;
+                        await ProcessGetContacts(clientId.Value, ws);
+                        break;
                     case "UpdateProfile" when clientId != null:
-                        await ProcessUpdateProfile(msg, clientId.Value); break;
+                        await ProcessUpdateProfile(msg, clientId.Value);
+                        break;
                     case "AddContact" when clientId != null:
-                        await ProcessAddContact(msg, clientId.Value); break;
+                        await ProcessAddContact(msg, clientId.Value, ws);
+                        break;
                     case "Ping":
-                        await Send(writer, new { Type = "Pong" }); break;
+                        await Send(ws, new { Type = "Pong" });
+                        break;
                 }
             }
         }
-        catch (Exception ex) { Console.WriteLine($"Ошибка обработки клиента {clientId}: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка в соединении клиента {clientId}: {ex.Message}");
+        }
         finally
         {
-            if (clientId.HasValue) clients.TryRemove(clientId.Value, out _);
+            // Очистка при отключении: снять клиента и оповестить остальных
             if (clientId.HasValue)
             {
-                // Уведомляем остальных, что пользователь отключился
+                clients.TryRemove(clientId.Value, out _);
                 _ = Task.Run(async () =>
                     await BroadcastExcept(clientId.Value, new { Type = "UserOffline", Payload = new OnlineStatusPayload { UserId = clientId.Value } }));
             }
-            try { tcp.Close(); } catch { }
+            try { ws.Dispose(); } catch { }
         }
     }
 
-    // Рассылает сообщение всем клиентам, кроме указанного (exceptClientId).
-    static async Task BroadcastExcept(int? exceptClientId, object message)
+    // Авторизация по логину/паролю
+    static async Task<int?> ProcessLogin(BaseMessage msg, WebSocket ws)
     {
-        foreach (var kvp in clients)
+        var p = msg.Payload.Deserialize<LoginPayload>();
+        if (p == null) return null;
+
+        var authResult = db.Authenticate(p.Login, p.Password);
+        if (authResult == null)
         {
-            if (kvp.Key == exceptClientId) continue;
-            try
-            {
-                await Send(kvp.Value, message);
-            }
-            catch { /* клиент мог уже отключиться */ }
+            await Send(ws, new { Type = "LoginResponse", Payload = new LoginResponsePayload { Status = "InvalidCredentials" } });
+            return null;
         }
+
+        int userId = authResult.Value.id;
+        string userName = authResult.Value.name;
+        string token = authResult.Value.token;
+
+        clients[userId] = ws;
+
+        await Send(ws, new
+        {
+            Type = "LoginResponse",
+            Payload = new LoginResponsePayload
+            {
+                Status = "Ok",
+                UserId = userId,
+                UserName = userName,
+                Token = token
+            }
+        });
+
+        await NotifyOnlineStatus(userId, ws);
+        return userId;
     }
 
-    // Отправляет клиенту список его контактов с серверными данными (имя, онлайн).
-    static async Task ProcessGetContacts(int userId, StreamWriter writer)
+    // Регистрация нового пользователя с публичным ключом
+    static async Task<int?> ProcessRegisterAccount(BaseMessage msg, WebSocket ws)
+    {
+        var p = msg.Payload.Deserialize<RegisterAccountPayload>();
+        if (p == null) return null;
+
+        var regResult = db.RegisterUser(p.Login, p.Password, p.UserName, p.PublicKey);
+        if (regResult == null)
+        {
+            await Send(ws, new { Type = "RegisterAccountResponse", Payload = new RegisterAccountResponsePayload { Status = "UserExists" } });
+            return null;
+        }
+
+        int userId = regResult.Value.id;
+        string token = regResult.Value.token;
+
+        clients[userId] = ws;
+
+        await Send(ws, new
+        {
+            Type = "RegisterAccountResponse",
+            Payload = new RegisterAccountResponsePayload
+            {
+                Status = "Ok",
+                AssignedId = userId,
+                Token = token
+            }
+        });
+
+        await NotifyOnlineStatus(userId, ws);
+        return userId;
+    }
+
+    // Переавторизация по токену (или ClientId) без пароля
+    static async Task<int?> ProcessHello(BaseMessage msg, WebSocket ws, int? current)
+    {
+        var p = msg.Payload.Deserialize<HelloPayload>();
+        if (p == null) return null;
+
+        int? userId = null;
+        if (!string.IsNullOrEmpty(p.Token))
+        {
+            userId = db.ValidateSession(p.Token);
+        }
+        else if (p.ClientId > 0 && db.UserExists(p.ClientId))
+        {
+            userId = p.ClientId;
+        }
+
+        if (userId == null)
+        {
+            await Send(ws, new { Type = "Error", Payload = new SimpleStatusPayload { Status = "UnknownClient" } });
+            return null;
+        }
+
+        clients[userId.Value] = ws;
+        string name = db.GetUserName(userId.Value) ?? $"User {userId.Value}";
+
+        await Send(ws, new
+        {
+            Type = "HelloResponse",
+            Payload = new HelloResponsePayload
+            {
+                Status = "Ok",
+                UserId = userId.Value,
+                UserName = name
+            }
+        });
+
+        await NotifyOnlineStatus(userId.Value, ws);
+        return userId.Value;
+    }
+
+    // Информирование о смене онлайн-статуса (себе — о контактах, остальным — о себе)
+    static async Task NotifyOnlineStatus(int userId, WebSocket ws)
     {
         var contactIds = db.GetContactIds(userId);
-        var contacts = new List<UserInfo>();
+        foreach (var contactId in contactIds)
+        {
+            if (clients.ContainsKey(contactId))
+            {
+                await Send(ws, new { Type = "UserOnline", Payload = new OnlineStatusPayload { UserId = contactId } });
+            }
+        }
+
+        _ = Task.Run(async () =>
+            await BroadcastExcept(userId, new { Type = "UserOnline", Payload = new OnlineStatusPayload { UserId = userId } }));
+    }
+
+    // Список контактов с онлайн-статусом
+    static async Task ProcessGetContacts(int userId, WebSocket ws)
+    {
+        var contactIds = db.GetContactIds(userId);
+        var contacts = new System.Collections.Generic.List<UserInfo>();
         foreach (var id in contactIds)
         {
             var name = db.GetUserName(id) ?? $"User {id}";
-            bool isOnline = clients.ContainsKey(id);               // <-- проверка
+            bool isOnline = clients.ContainsKey(id);
             contacts.Add(new UserInfo { Id = id, Name = name, IsOnline = isOnline });
         }
-        await Send(writer, new
-        {
-            Type = "ContactList",
-            Payload = new ContactListPayload { Contacts = contacts }
-        });
+        await Send(ws, new { Type = "ContactList", Payload = new ContactListPayload { Contacts = contacts } });
     }
 
-    // Регистрация нового пользователя: сохраняет публичный ключ, возвращает ID.
-    static async Task ProcessRegister(BaseMessage msg, StreamWriter writer)
-    {
-        var p = msg.Payload.Deserialize<RegisterPayload>();
-        int id = db.AddUser(p.PublicKey);
-        await Send(writer, new { Type = "RegisterResponse", Payload = new RegisterResponsePayload { Status = "Ok", AssignedId = id } });
-    }
-
-    // Обработка Hello (вход в сеть):
-    // проверяет существование пользователя, регистрирует текущее соединение,
-    // отправляет статусы онлайна контактов и оповещает остальных.
-    static async Task<int?> ProcessHello(BaseMessage msg, StreamWriter writer, int? current)
-    {
-        var p = msg.Payload.Deserialize<HelloPayload>();
-        if (!db.UserExists(p.ClientId))
-        {
-            await Send(writer, new { Type = "Error", Payload = new SimpleStatusPayload { Status = "UnknownClient" } });
-            return null;
-        }
-        // Если уже было соединение с этим ID, закрываем старое
-        if (clients.TryGetValue(p.ClientId, out var old))
-        {
-            try { old.Dispose(); } catch { }
-            clients.TryRemove(p.ClientId, out _);
-        }
-        clients[p.ClientId] = writer;
-        await Send(writer, new { Type = "HelloResponse", Payload = new { Status = "Ok" } });
-
-        // === ИЗМЕНЕНИЕ: отправляем подключившемуся клиенту статусы "онлайн" для всех контактов, которые в сети сейчас ===
-        var contactIds = db.GetContactIds(p.ClientId);
-        foreach (var contactId in contactIds)
-        {
-            if (clients.ContainsKey(contactId))  // контакт онлайн
-            {
-                await Send(writer, new
-                {
-                    Type = "UserOnline",
-                    Payload = new OnlineStatusPayload { UserId = contactId }
-                });
-            }
-        }
-
-        // Уведомляем остальных, что пользователь в сети
-        _ = Task.Run(async () =>
-            await BroadcastExcept(p.ClientId, new { Type = "UserOnline", Payload = new OnlineStatusPayload { UserId = p.ClientId } }));
-
-        return p.ClientId;
-    }
-
-    // Возвращает публичный ключ запрошенного пользователя.
-    static async Task ProcessGetPublicKey(BaseMessage msg, StreamWriter writer)
+    // Выдача публичного RSA-ключа получателя
+    static async Task ProcessGetPublicKey(BaseMessage msg, WebSocket ws)
     {
         var p = msg.Payload.Deserialize<GetPublicKeyPayload>();
-        string? key = db.GetPublicKey(p.TargetId);
-        await Send(writer, new
+        string? key = p != null ? db.GetPublicKey(p.TargetId) : null;
+        await Send(ws, new
         {
             Type = "PublicKeyResponse",
             Payload = new PublicKeyResponsePayload
             {
                 Status = key != null ? "Ok" : "NotFound",
-                TargetId = p.TargetId,
+                TargetId = p?.TargetId ?? 0,
                 PublicKey = key ?? ""
             }
         });
     }
 
-    // Возвращает имя запрошенного пользователя.
-    static async Task ProcessGetUserInfo(BaseMessage msg, StreamWriter writer)
+    // Информация о пользователе (имя)
+    static async Task ProcessGetUserInfo(BaseMessage msg, WebSocket ws)
     {
         var p = msg.Payload.Deserialize<GetUserInfoPayload>();
-        string? name = db.GetUserName(p.TargetId);
-        await Send(writer, new
+        string? name = p != null ? db.GetUserName(p.TargetId) : null;
+        await Send(ws, new
         {
             Type = "UserInfoResponse",
             Payload = new UserInfoResponsePayload
             {
                 Status = name != null ? "Ok" : "NotFound",
-                UserId = p.TargetId,
+                UserId = p?.TargetId ?? 0,
                 UserName = name ?? ""
             }
         });
     }
 
-    // Обрабатывает отправку сообщения:
-    // сохраняет в БД, при необходимости добавляет контакт,
-    // доставляет получателю (если онлайн) или возвращает статус "UserOffline".
-    static async Task ProcessSendMessage(BaseMessage msg, int senderId, StreamWriter writer)
+    // Сохранение сообщения и доставка получателю, если он онлайн
+    static async Task ProcessSendMessage(BaseMessage msg, int senderId, WebSocket ws)
     {
         var p = msg.Payload.Deserialize<SendMessagePayload>();
+        if (p == null) return;
+
+        // Сохраняем в БД (шифртекст, ключи, метаданные)
         db.SaveMessage(
             p.MessageId,
             senderId,
@@ -243,18 +361,19 @@ class Server
             p.FileSize,
             p.FileTransferId,
             "Sent",
-            p.EncryptedKeySelf    // === ИЗМЕНЕНИЕ: передаём новый параметр ===
+            p.EncryptedKeySelf
         );
-        // Автоматически добавляем контакт, если его ещё нет
         db.AddContact(senderId, p.ReceiverId);
 
-        if (!clients.TryGetValue(p.ReceiverId, out var recvWriter))
+        // Получатель офлайн — сообщаем отправителю
+        if (!clients.TryGetValue(p.ReceiverId, out var recvWs) || recvWs.State != WebSocketState.Open)
         {
-            await Send(writer, new { Type = "DeliveryStatus", Payload = new DeliveryStatusPayload { MessageId = p.MessageId, Status = "UserOffline" } });
+            await Send(ws, new { Type = "DeliveryStatus", Payload = new DeliveryStatusPayload { MessageId = p.MessageId, Status = "UserOffline" } });
             return;
         }
-        // Доставляем сообщение получателю
-        await Send(recvWriter, new
+
+        // Доставка получателю
+        await Send(recvWs, new
         {
             Type = "IncomingMessage",
             Payload = new IncomingMessagePayload
@@ -269,91 +388,87 @@ class Server
                 FileTransferId = p.FileTransferId
             }
         });
-        await Send(writer, new { Type = "DeliveryStatus", Payload = new DeliveryStatusPayload { MessageId = p.MessageId, Status = "Sent" } });
+
+        await Send(ws, new { Type = "DeliveryStatus", Payload = new DeliveryStatusPayload { MessageId = p.MessageId, Status = "Sent" } });
     }
 
-    // Обрабатывает подтверждение о доставке (Ack) от получателя.
-    // Обновляет статус в БД и уведомляет отправителя.
+    // Обработка подтверждения: отметка "Delivered" и уведомление отправителя
     static async Task ProcessAck(BaseMessage msg)
     {
         var p = msg.Payload.Deserialize<AckPayload>();
-        if (p.Status == "Delivered")
+        if (p != null && p.Status == "Delivered")
         {
             db.UpdateMessageStatus(p.MessageId, "Delivered");
-            var senderId = GetSenderByMessageId(p.MessageId);
-            if (senderId.HasValue && clients.TryGetValue(senderId.Value, out var sw))
+            var senderId = db.GetSenderByMessageId(p.MessageId);
+            if (senderId.HasValue && clients.TryGetValue(senderId.Value, out var senderWs))
             {
-                await Send(sw, new { Type = "DeliveryStatus", Payload = new DeliveryStatusPayload { MessageId = p.MessageId, Status = "Delivered" } });
+                await Send(senderWs, new { Type = "DeliveryStatus", Payload = new DeliveryStatusPayload { MessageId = p.MessageId, Status = "Delivered" } });
             }
         }
     }
 
-    // Получает ID отправителя по MessageId.
-    static int? GetSenderByMessageId(string messageId)
-    {
-        using var conn = new SqliteConnection(db.ConnectionString);
-        conn.Open();
-        var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT SenderId FROM Messages WHERE MessageId = @id";
-        cmd.Parameters.AddWithValue("@id", messageId);
-        var result = cmd.ExecuteScalar();
-        return result != null ? Convert.ToInt32(result) : (int?)null;
-    }
-
-    // Возвращает историю сообщений с конкретным контактом.
-    static async Task ProcessGetHistory(BaseMessage msg, int userId, StreamWriter writer)
+    // История переписки между двумя пользователями
+    static async Task ProcessGetHistory(BaseMessage msg, int userId, WebSocket ws)
     {
         var p = msg.Payload.Deserialize<GetHistoryRequestPayload>();
+        if (p == null) return;
         var messages = db.GetHistory(userId, p.ContactId);
-        await Send(writer, new
-        {
-            Type = "HistoryResponse",
-            Payload = new HistoryResponsePayload { ContactId = p.ContactId, Messages = messages }
-        });
+        await Send(ws, new { Type = "HistoryResponse", Payload = new HistoryResponsePayload { ContactId = p.ContactId, Messages = messages } });
     }
 
-    // Добавляет контакт (если целевой пользователь существует).
-    static async Task ProcessAddContact(BaseMessage msg, int userId)
+    // Добавление контакта (с уведомлением об онлайн-статусе)
+    static async Task ProcessAddContact(BaseMessage msg, int userId, WebSocket ws)
     {
         var p = msg.Payload.Deserialize<AddContactPayload>();
-        if (!db.UserExists(p.ContactId))
+        if (p == null || !db.UserExists(p.ContactId))
         {
-            await Send(clients[userId], new
-            {
-                Type = "AddContactResponse",
-                Payload = new AddContactResponsePayload { Status = "NotFound", ContactId = p.ContactId }
-            });
+            await Send(ws, new { Type = "AddContactResponse", Payload = new AddContactResponsePayload { Status = "NotFound", ContactId = p?.ContactId ?? 0 } });
             return;
         }
         db.AddContact(userId, p.ContactId);
-        await Send(clients[userId], new
+        await Send(ws, new { Type = "AddContactResponse", Payload = new AddContactResponsePayload { Status = "Ok", ContactId = p.ContactId } });
+        if (clients.ContainsKey(p.ContactId))
         {
-            Type = "AddContactResponse",
-            Payload = new AddContactResponsePayload { Status = "Ok", ContactId = p.ContactId }
-        });
+            await Send(ws, new { Type = "UserOnline", Payload = new OnlineStatusPayload { UserId = p.ContactId } });
+        }
     }
 
-    // Обновляет имя пользователя и рассылает всем уведомление.
+    // Смена имени пользователя + рассылка всем клиентам
     static async Task ProcessUpdateProfile(BaseMessage msg, int clientId)
     {
         var p = msg.Payload.Deserialize<UpdateProfilePayload>();
+        if (p == null) return;
         db.UpdateUserName(clientId, p.UserName);
-        var notification = new
+        var notification = new { Type = "UserProfileUpdated", Payload = new UserProfileUpdatedPayload { UserId = clientId, UserName = p.UserName } };
+        foreach (var clientWs in clients.Values)
         {
-            Type = "UserProfileUpdated",
-            Payload = new UserProfileUpdatedPayload { UserId = clientId, UserName = p.UserName }
-        };
-        foreach (var sw in clients.Values)
-            await Send(sw, notification);
+            await Send(clientWs, notification);
+        }
     }
 
-    // Отправляет JSON-сообщение через StreamWriter с префиксом длины (4 байта).
-    static async Task Send(StreamWriter writer, object obj)
+    // Широковещательная рассылка всем, кроме одного пользователя
+    static async Task BroadcastExcept(int? exceptClientId, object message)
     {
+        foreach (var kvp in clients)
+        {
+            if (kvp.Key == exceptClientId) continue;
+            try
+            {
+                if (kvp.Value.State == WebSocketState.Open)
+                {
+                    await Send(kvp.Value, message);
+                }
+            }
+            catch { }
+        }
+    }
+
+    // Утилита: сериализация и отправка в WS
+    static async Task Send(WebSocket ws, object obj)
+    {
+        if (ws.State != WebSocketState.Open) return;
         string json = JsonSerializer.Serialize(obj);
         byte[] bytes = Encoding.UTF8.GetBytes(json);
-        byte[] len = BitConverter.GetBytes(bytes.Length);
-        await writer.BaseStream.WriteAsync(len, 0, 4);
-        await writer.BaseStream.WriteAsync(bytes, 0, bytes.Length);
+        await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
     }
 }

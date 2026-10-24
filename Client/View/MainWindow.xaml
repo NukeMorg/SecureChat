@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:SecureChat.Client"
         xmlns:conv="clr-namespace:SecureChat.Client.Services"
-        Title="SecureChat" Height="650" Width="950"
+        Title="SecureChat Enterprise" Height="650" Width="950"
         Background="{DynamicResource WindowBackground}"
         Foreground="{DynamicResource ForegroundColor}"
         Closing="Window_Closing">
@@ -42,40 +42,17 @@
         </Grid.RowDefinitions>
 
         <Menu Grid.Row="0" FontSize="13" Background="{DynamicResource SidebarBackground}" Foreground="{DynamicResource ForegroundColor}">
-            <Menu.Resources>
-                <!-- Стиль для MenuItem -->
-                <Style TargetType="MenuItem">
-                    <Setter Property="Background" Value="Transparent"/>
-                    <Setter Property="Foreground" Value="{DynamicResource ForegroundColor}"/>
-                    <Setter Property="Padding" Value="8,4"/>
-                    <Style.Triggers>
-                        <Trigger Property="IsHighlighted" Value="True">
-                            <Setter Property="Background" Value="{DynamicResource ContactItemBackground}"/>
-                            <Setter Property="BorderBrush" Value="{DynamicResource OutgoingMessageColor}"/>
-                            <Setter Property="BorderThickness" Value="0,0,0,2"/>
-                        </Trigger>
-                        <Trigger Property="IsEnabled" Value="False">
-                            <Setter Property="Opacity" Value="0.5"/>
-                        </Trigger>
-                    </Style.Triggers>
-                </Style>
-
-                <!-- Стиль для Separator -->
-                <Style TargetType="Separator">
-                    <Setter Property="Background" Value="{DynamicResource StatusForeground}"/>
-                    <Setter Property="Height" Value="1"/>
-                    <Setter Property="Margin" Value="4,2"/>
-                </Style>
-            </Menu.Resources>
-
             <!-- Файл -->
             <MenuItem Header="Файл">
+                <MenuItem Header="Переподключиться" Click="Reconnect_Click"/>
+                <Separator/>
+                <MenuItem Header="Сменить учетную запись" Click="SwitchAccount_Click"/>
                 <MenuItem Header="Выход" Command="{x:Static local:MainWindow.ExitCommand}" InputGestureText="Ctrl+Q"/>
             </MenuItem>
 
             <!-- Сервер -->
             <MenuItem Header="Сервер">
-                <MenuItem Header="Указать адрес сервера..." Command="{x:Static local:MainWindow.ChangeServerAddressCommand}" InputGestureText="Ctrl+S"/>
+                <MenuItem Header="Указать адрес сервера WebSocket..." Command="{x:Static local:MainWindow.ChangeServerAddressCommand}" InputGestureText="Ctrl+S"/>
             </MenuItem>
 
             <!-- Вид -->
@@ -90,7 +67,7 @@
                 <MenuItem Header="Показать мой публичный ключ" Click="ShowMyPublicKey_Click"/>
             </MenuItem>
 
-            <!-- Помощь -->
+            <!-- Справка -->
             <MenuItem Header="Справка">
                 <MenuItem Header="О программе" Click="About_Click"/>
                 <Separator/>
@@ -104,7 +81,7 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Левая панель -->
+            <!-- Левая панель: контакты со статусом в сети / не в сети -->
             <Border Grid.Column="0" Background="{DynamicResource SidebarBackground}" CornerRadius="8" Margin="8">
                 <Grid Margin="5">
                     <Grid.RowDefinitions>
@@ -114,8 +91,7 @@
 
                     <StackPanel Grid.Row="0" Margin="5">
                         <StackPanel Orientation="Horizontal">
-                            <Ellipse x:Name="ConnectionIndicator" Width="10" Height="10" Fill="Gray" Margin="0,0,8,0"
-                                     VerticalAlignment="Center"/>
+                            <Ellipse x:Name="ConnectionIndicator" Width="10" Height="10" Fill="Gray" Margin="0,0,8,0" VerticalAlignment="Center"/>
                             <TextBlock x:Name="UserIdTextBlock" Text="ID: -" FontWeight="Bold" FontSize="14"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,5">
@@ -143,12 +119,8 @@
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                        </Grid.RowDefinitions>
-                                        <!-- Индикатор онлайн -->
-                                        <Ellipse Grid.RowSpan="2" Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center">
+                                        <!-- Индикатор онлайн: зеленый / серый -->
+                                        <Ellipse Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center">
                                             <Ellipse.Style>
                                                 <Style TargetType="Ellipse">
                                                     <Setter Property="Fill" Value="Gray"/>
@@ -160,13 +132,11 @@
                                                 </Style>
                                             </Ellipse.Style>
                                         </Ellipse>
-                                        <!-- Имя и ID -->
+                                        <!-- Имя + ID и только статус в сети / не в сети -->
                                         <StackPanel Grid.Column="1">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"/>
-                                            </StackPanel>
-                                            <TextBlock Grid.Row="1" Text="{Binding StatusText}" FontSize="11"
-                           Foreground="{DynamicResource StatusForeground}" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"/>
+                                            <TextBlock Text="{Binding StatusText}" FontSize="11"
+                                                       Foreground="{DynamicResource StatusForeground}" TextTrimming="CharacterEllipsis"/>
                                         </StackPanel>
                                     </Grid>
                                 </Border>
@@ -176,7 +146,7 @@
                 </Grid>
             </Border>
 
-            <!-- Правая панель -->
+            <!-- Правая панель: переписка E2EE -->
             <Grid Grid.Column="1" Margin="8">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
@@ -187,12 +157,11 @@
                     <ListBox x:Name="MessagesListBox"
                              Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
                              BorderThickness="0"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             ItemsSource="{Binding}">
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Grid HorizontalAlignment="{Binding IsOutgoing, Converter={StaticResource BoolToHorizontalAlignmentConverter}}" Margin="4">
-                                    <Border CornerRadius="10" Padding="10,8" MaxWidth="400" SnapsToDevicePixels="True">
+                                    <Border CornerRadius="10" Padding="10,8" MaxWidth="400">
                                         <Border.Style>
                                             <Style TargetType="Border">
                                                 <Setter Property="Background" Value="{DynamicResource IncomingMessageColor}"/>

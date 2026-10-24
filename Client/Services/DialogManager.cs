@@ -2,19 +2,20 @@
 
 namespace SecureChat.Client.Services;
 
-// Хранит сессионные ключи для каждого собеседника и историю сообщений.
+// Хранилище сессионных ключей, публичных ключей и локальной истории диалогов
 public class DialogManager
 {
     private readonly CryptoService _crypto;
-    private Dictionary<int, byte[]> _sessionKeys = new();
-    private Dictionary<int, List<Models.DialogMessage>> _history = new();
+    private Dictionary<int, byte[]> _sessionKeys = new();                  // contactId -> AES-сессионный ключ
+    private Dictionary<int, List<Models.DialogMessage>> _history = new(); // contactId -> локальная история
+    private Dictionary<int, string> _publicKeys = new();                   // contactId -> RSA-публичный ключ (PEM)
 
     public DialogManager(CryptoService crypto)
     {
         _crypto = crypto;
     }
 
-    // Возвращает существующий сессионный ключ или создаёт новый.
+    // Вернуть существующий сессионный ключ или сгенерировать новый
     public byte[] GetOrCreateSessionKey(int contactId)
     {
         if (_sessionKeys.TryGetValue(contactId, out var key))
@@ -24,20 +25,31 @@ public class DialogManager
         return key;
     }
 
-    // Получить сессионный ключ (может быть null).
+    // Получить сессионный ключ или null, если ещё не создан
     public byte[]? GetSessionKey(int contactId)
     {
         _sessionKeys.TryGetValue(contactId, out var key);
         return key;
     }
 
-    // Задать сессионный ключ.
     public void SetSessionKey(int contactId, byte[] key)
     {
         _sessionKeys[contactId] = key;
     }
 
-    // Добавить сообщение в историю.
+    // Публичный ключ собеседника (кэш, чтобы не запрашивать каждый раз)
+    public string? GetPublicKey(int contactId)
+    {
+        _publicKeys.TryGetValue(contactId, out var key);
+        return key;
+    }
+
+    public void SetPublicKey(int contactId, string key)
+    {
+        _publicKeys[contactId] = key;
+    }
+
+    // Добавление сообщения в локальную историю диалога
     public void AddMessage(int contactId, Models.DialogMessage msg)
     {
         if (!_history.ContainsKey(contactId))
@@ -45,7 +57,7 @@ public class DialogManager
         _history[contactId].Add(msg);
     }
 
-    // Получить историю сообщений с контактом.
+    // Получение локальной истории (пустой список, если нет данных)
     public List<Models.DialogMessage> GetHistory(int contactId)
     {
         _history.TryGetValue(contactId, out var list);

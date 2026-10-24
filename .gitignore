@@ -69,3 +69,7 @@ x86/
 
 # Publish Web Output
 *.[Pp]ublish.xml
+
+### Client
+# Client images folder
+Client/Images/

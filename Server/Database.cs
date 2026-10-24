@@ -1,28 +1,38 @@
 ﻿using Microsoft.Data.Sqlite;
+using System;
 using System.Collections.Generic;
+using System.Security.Cryptography;
+using System.Text;
 using SecureChat.Common;
 
 namespace SecureChat.Server;
 
-// Работа с базой данных SQLite: хранение клиентов, сообщений, контактов.
+// База данных SQLite: пользователи, сессии, сообщения, контакты
 public class Database
 {
     readonly string cs = "Data Source=server.db";
-
     public string ConnectionString => cs;
 
-    // Инициализирует таблицы и выполняет необходимые миграции.
+    // Создание схемы БД (вызывается один раз при старте сервера)
     public void Initialize()
     {
         using var conn = new SqliteConnection(cs);
         conn.Open();
         var cmd = conn.CreateCommand();
-        // Создаём таблицы, если их ещё нет
         cmd.CommandText = @"
             CREATE TABLE IF NOT EXISTS Clients (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Login TEXT UNIQUE,
+                PasswordHash TEXT,
+                Salt TEXT,
                 PublicKey TEXT NOT NULL,
                 UserName TEXT DEFAULT 'User'
+            );
+            CREATE TABLE IF NOT EXISTS Sessions (
+                Token TEXT PRIMARY KEY,
+                UserId INTEGER NOT NULL,
+                CreatedAt TEXT NOT NULL,
+                FOREIGN KEY (UserId) REFERENCES Clients(Id)
             );
             CREATE TABLE IF NOT EXISTS Messages (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,6 +40,7 @@ public class Database
                 SenderId INTEGER NOT NULL,
                 ReceiverId INTEGER NOT NULL,
                 EncryptedKey TEXT,
+                EncryptedKeySelf TEXT,
                 Nonce TEXT,
                 Ciphertext TEXT,
                 Tag TEXT,
@@ -51,35 +62,130 @@ public class Database
             );";
         cmd.ExecuteNonQuery();
 
-        // Миграция: добавляем столбец EncryptedKeySelf, если его ещё нет
+        // Миграция: добавляем столбцы авторизации, если таблица была создана в старой версии
         try
         {
-            cmd.CommandText = "ALTER TABLE Messages ADD COLUMN EncryptedKeySelf TEXT";
+            cmd.CommandText = "ALTER TABLE Clients ADD COLUMN Login TEXT UNIQUE";
             cmd.ExecuteNonQuery();
         }
-        catch { /* столбец уже существует */ }
+        catch { }
 
-        // Миграция для старых таблиц (имя пользователя)
         try
         {
-            cmd.CommandText = "ALTER TABLE Clients ADD COLUMN UserName TEXT DEFAULT 'User'";
+            cmd.CommandText = "ALTER TABLE Clients ADD COLUMN PasswordHash TEXT";
+            cmd.ExecuteNonQuery();
+        }
+        catch { }
+
+        try
+        {
+            cmd.CommandText = "ALTER TABLE Clients ADD COLUMN Salt TEXT";
             cmd.ExecuteNonQuery();
         }
         catch { }
     }
 
-    // Добавляет нового пользователя с указанным публичным ключом и возвращает его ID.
-    public int AddUser(string pubKey)
+    // PBKDF2-SHA256: генерирует хеш и соль для пароля
+    public static (string hash, string salt) HashPassword(string password)
+    {
+        byte[] saltBytes = RandomNumberGenerator.GetBytes(16);
+        string salt = Convert.ToBase64String(saltBytes);
+        using var pbkdf2 = new Rfc2898DeriveBytes(password, saltBytes, 10000, HashAlgorithmName.SHA256);
+        byte[] hashBytes = pbkdf2.GetBytes(32);
+        string hash = Convert.ToBase64String(hashBytes);
+        return (hash, salt);
+    }
+
+    // Сравнение введённого пароля с сохранённым хешем
+    public static bool VerifyPassword(string password, string storedHash, string storedSalt)
+    {
+        byte[] saltBytes = Convert.FromBase64String(storedSalt);
+        using var pbkdf2 = new Rfc2898DeriveBytes(password, saltBytes, 10000, HashAlgorithmName.SHA256);
+        byte[] hashBytes = pbkdf2.GetBytes(32);
+        return Convert.ToBase64String(hashBytes) == storedHash;
+    }
+
+    // Регистрация нового пользователя: возвращает ID и токен сессии
+    public (int id, string token)? RegisterUser(string login, string password, string userName, string publicKey)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+
+        // Логин должен быть уникальным
+        var checkCmd = conn.CreateCommand();
+        checkCmd.CommandText = "SELECT COUNT(*) FROM Clients WHERE Login = @login";
+        checkCmd.Parameters.AddWithValue("@login", login);
+        if ((long)checkCmd.ExecuteScalar()! > 0) return null;
+
+        // Хешируем пароль и вставляем запись
+        var (hash, salt) = HashPassword(password);
+        var insertCmd = conn.CreateCommand();
+        insertCmd.CommandText = @"
+            INSERT INTO Clients (Login, PasswordHash, Salt, UserName, PublicKey)
+            VALUES (@login, @hash, @salt, @name, @key);
+            SELECT last_insert_rowid();";
+        insertCmd.Parameters.AddWithValue("@login", login);
+        insertCmd.Parameters.AddWithValue("@hash", hash);
+        insertCmd.Parameters.AddWithValue("@salt", salt);
+        insertCmd.Parameters.AddWithValue("@name", string.IsNullOrWhiteSpace(userName) ? login : userName);
+        insertCmd.Parameters.AddWithValue("@key", publicKey);
+
+        int id = Convert.ToInt32(insertCmd.ExecuteScalar());
+        string token = CreateSession(id);
+        return (id, token);
+    }
+
+    // Авторизация: проверка пароля и создание сессии
+    public (int id, string name, string token)? Authenticate(string login, string password)
     {
         using var conn = new SqliteConnection(cs);
         conn.Open();
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO Clients (PublicKey) VALUES (@key); SELECT last_insert_rowid();";
-        cmd.Parameters.AddWithValue("@key", pubKey);
-        return Convert.ToInt32(cmd.ExecuteScalar());
+        cmd.CommandText = "SELECT Id, UserName, PasswordHash, Salt FROM Clients WHERE Login = @login";
+        cmd.Parameters.AddWithValue("@login", login);
+        using var reader = cmd.ExecuteReader();
+        if (reader.Read())
+        {
+            int id = reader.GetInt32(0);
+            string name = reader.GetString(1);
+            string hash = reader.GetString(2);
+            string salt = reader.GetString(3);
+            if (VerifyPassword(password, hash, salt))
+            {
+                string token = CreateSession(id);
+                return (id, name, token);
+            }
+        }
+        return null;
     }
 
-    // Проверяет, существует ли пользователь с заданным ID.
+    // Создание новой сессии и возврат токена
+    public string CreateSession(int userId)
+    {
+        string token = Guid.NewGuid().ToString("N");
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "INSERT INTO Sessions (Token, UserId, CreatedAt) VALUES (@token, @uid, @time)";
+        cmd.Parameters.AddWithValue("@token", token);
+        cmd.Parameters.AddWithValue("@uid", userId);
+        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.ExecuteNonQuery();
+        return token;
+    }
+
+    // Проверка токена сессии → UserId или null
+    public int? ValidateSession(string token)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT UserId FROM Sessions WHERE Token = @token";
+        cmd.Parameters.AddWithValue("@token", token);
+        var result = cmd.ExecuteScalar();
+        return result != null ? Convert.ToInt32(result) : null;
+    }
+
     public bool UserExists(int id)
     {
         using var conn = new SqliteConnection(cs);
@@ -87,10 +193,9 @@ public class Database
         var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM Clients WHERE Id=@id";
         cmd.Parameters.AddWithValue("@id", id);
-        return (long)cmd.ExecuteScalar() > 0;
+        return (long)cmd.ExecuteScalar()! > 0;
     }
 
-    // Возвращает публичный ключ пользователя по ID (или null).
     public string? GetPublicKey(int id)
     {
         using var conn = new SqliteConnection(cs);
@@ -101,7 +206,6 @@ public class Database
         return cmd.ExecuteScalar() as string;
     }
 
-    // Обновляет имя пользователя.
     public void UpdateUserName(int id, string userName)
     {
         using var conn = new SqliteConnection(cs);
@@ -113,7 +217,6 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    // Получает имя пользователя по ID.
     public string? GetUserName(int id)
     {
         using var conn = new SqliteConnection(cs);
@@ -124,25 +227,11 @@ public class Database
         return cmd.ExecuteScalar() as string;
     }
 
-    // Возвращает список всех зарегистрированных пользователей (ID и имя).
-    public List<(int id, string name)> GetAllUsers()
-    {
-        var list = new List<(int, string)>();
-        using var conn = new SqliteConnection(cs);
-        conn.Open();
-        var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT Id, UserName FROM Clients";
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read()) list.Add((reader.GetInt32(0), reader.GetString(1)));
-        return list;
-    }
-
-    // Сохраняет сообщение в БД.
-    // Параметр encryptedKeySelf добавлен для возможности самому расшифровывать свою историю.
+    // Сохранение сообщения (текст или файл) в БД
     public void SaveMessage(string messageId, int senderId, int receiverId,
                             string? encryptedKey, string? nonce, string? ciphertext, string? tag,
                             string contentType, string? fileName, long fileSize, string? fileTransferId,
-                            string status = "Sent", string? encryptedKeySelf = null) // === ИЗМЕНЕНИЕ (добавлен параметр) ===
+                            string status = "Sent", string? encryptedKeySelf = null)
     {
         using var conn = new SqliteConnection(cs);
         conn.Open();
@@ -156,21 +245,21 @@ public class Database
         cmd.Parameters.AddWithValue("@msgId", messageId);
         cmd.Parameters.AddWithValue("@sender", senderId);
         cmd.Parameters.AddWithValue("@receiver", receiverId);
-        cmd.Parameters.AddWithValue("@encKey", encryptedKey ?? (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@nonce", nonce ?? (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@ct", ciphertext ?? (object)DBNull.Value);
-        cmd.Parameters.AddWithValue("@tag", tag ?? (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@encKey", (object?)encryptedKey ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@nonce", (object?)nonce ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@ct", (object?)ciphertext ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@tag", (object?)tag ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@ctype", contentType);
-        cmd.Parameters.AddWithValue("@fname", fileName ?? (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@fname", (object?)fileName ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@fsize", fileSize);
-        cmd.Parameters.AddWithValue("@ftransfer", fileTransferId ?? (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("@ftransfer", (object?)fileTransferId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
         cmd.Parameters.AddWithValue("@status", status);
-        cmd.Parameters.AddWithValue("@encKeySelf", encryptedKeySelf ?? (object)DBNull.Value); // === ИЗМЕНЕНИЕ ===
+        cmd.Parameters.AddWithValue("@encKeySelf", (object?)encryptedKeySelf ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
 
-    // Обновляет статус доставки сообщения.
+    // Обновление статуса доставки (например, "Delivered")
     public void UpdateMessageStatus(string messageId, string status)
     {
         using var conn = new SqliteConnection(cs);
@@ -182,15 +271,25 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    // Возвращает историю сообщений между двумя пользователями.
-    // В выборку добавлен EncryptedKeySelf.
+    // Поиск отправителя по ID сообщения (для уведомления о доставке)
+    public int? GetSenderByMessageId(string messageId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT SenderId FROM Messages WHERE MessageId = @id";
+        cmd.Parameters.AddWithValue("@id", messageId);
+        var result = cmd.ExecuteScalar();
+        return result != null ? Convert.ToInt32(result) : null;
+    }
+
+    // История переписки двух пользователей в хронологическом порядке
     public List<HistoryMessage> GetHistory(int userId1, int userId2)
     {
         var list = new List<HistoryMessage>();
         using var conn = new SqliteConnection(cs);
         conn.Open();
         var cmd = conn.CreateCommand();
-        // === ИЗМЕНЕНИЕ: добавили EncryptedKeySelf в SELECT ===
         cmd.CommandText = @"
             SELECT MessageId, SenderId, ReceiverId, EncryptedKey, EncryptedKeySelf, Nonce, Ciphertext, Tag,
                    ContentType, FileName, FileSize, FileTransferId, Timestamp, Status
@@ -209,7 +308,7 @@ public class Database
                 SenderId = reader.GetInt32(1),
                 ReceiverId = reader.GetInt32(2),
                 EncryptedKey = reader.IsDBNull(3) ? null : reader.GetString(3),
-                EncryptedKeySelf = reader.IsDBNull(4) ? null : reader.GetString(4), // === ИЗМЕНЕНИЕ ===
+                EncryptedKeySelf = reader.IsDBNull(4) ? null : reader.GetString(4),
                 Nonce = reader.IsDBNull(5) ? null : reader.GetString(5),
                 Ciphertext = reader.IsDBNull(6) ? null : reader.GetString(6),
                 Tag = reader.IsDBNull(7) ? null : reader.GetString(7),
@@ -224,7 +323,7 @@ public class Database
         return list;
     }
 
-    // Добавляет двусторонний контакт (userId <-> contactId).
+    // Двусторонняя связь контактов (симметрично)
     public void AddContact(int userId, int contactId)
     {
         using var conn = new SqliteConnection(cs);
@@ -234,7 +333,7 @@ public class Database
         cmd.Parameters.AddWithValue("@uid", userId);
         cmd.Parameters.AddWithValue("@cid", contactId);
         cmd.ExecuteNonQuery();
-        // двусторонняя связь
+
         cmd.CommandText = "INSERT OR IGNORE INTO Contacts (UserId, ContactId) VALUES (@uid2, @cid2)";
         cmd.Parameters.Clear();
         cmd.Parameters.AddWithValue("@uid2", contactId);
@@ -242,7 +341,7 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    // Возвращает список ID контактов для указанного пользователя.
+    // ID всех контактов пользователя
     public List<int> GetContactIds(int userId)
     {
         var ids = new List<int>();

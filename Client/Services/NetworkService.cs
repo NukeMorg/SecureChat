@@ -1,25 +1,25 @@
 ﻿using System;
 using System.IO;
-using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using SecureChat.Common;
 
 namespace SecureChat.Client.Services;
 
-// Сетевое взаимодействие с сервером: подключение, отправка, приём сообщений.
+// Сетевое взаимодействие через WebSocket (ClientWebSocket) с поддержкой авторизации
 public class NetworkService
 {
-    private TcpClient? _tcp;
-    private NetworkStream? _stream;
-    private volatile bool _isDisconnecting;
+    private ClientWebSocket? _ws;              // Активное WS-соединение
+    private CancellationTokenSource? _cts;     // Отмена фоновых операций
+    private volatile bool _isDisconnecting;    // Флаг, чтобы не сыпать ошибками при штатном отключении
 
-    // События для уведомления UI
+    // События входящих сообщений от сервера
     public event Action<IncomingMessagePayload>? OnIncomingMessage;
     public event Action<DeliveryStatusPayload>? OnDeliveryStatus;
     public event Action<PublicKeyResponsePayload>? OnPublicKeyResponse;
-    public event Action<UserListPayload>? OnUserList;
     public event Action<UserProfileUpdatedPayload>? OnUserProfileUpdated;
     public event Action<UserInfoResponsePayload>? OnUserInfoResponse;
     public event Action<HistoryResponsePayload>? OnHistoryResponse;
@@ -27,43 +27,52 @@ public class NetworkService
     public event Action<string>? OnError;
     public event Action? OnConnected;
     public event Action? OnDisconnected;
-    public event Action<int>? OnRegisterResponse;
+    public event Action<LoginResponsePayload>? OnLoginResponse;
+    public event Action<RegisterAccountResponsePayload>? OnRegisterAccountResponse;
+    public event Action<HelloResponsePayload>? OnHelloResponse;
     public event Action<AddContactResponsePayload>? OnAddContactResponse;
-    public event Action<int>? OnUserOnline;
-    public event Action<int>? OnUserOffline;
+    public event Action<int>? OnUserOnline;    // Пользователь вошёл в сеть
+    public event Action<int>? OnUserOffline;   // Пользователь вышел из сети
 
-    public bool IsConnected => _tcp?.Connected ?? false;
+    public bool IsConnected => _ws?.State == WebSocketState.Open;
 
-    // Подключение к серверу
-    public async Task ConnectAsync(string host, int port)
+    // Установка соединения с сервером
+    public async Task ConnectAsync(string serverUrl)
     {
+        Disconnect();                         // Закрываем предыдущее соединение
         _isDisconnecting = false;
+        _cts = new CancellationTokenSource();
+
+        // Нормализация URL: префикс ws:// и завершающий слэш
+        string normalizedUrl = serverUrl.Trim();
+        if (!normalizedUrl.StartsWith("ws://") && !normalizedUrl.StartsWith("wss://"))
+        {
+            normalizedUrl = "ws://" + normalizedUrl;
+        }
+        if (!normalizedUrl.EndsWith("/"))
+        {
+            normalizedUrl += "/";
+        }
+
         try
         {
-            _tcp = new TcpClient();
-            await _tcp.ConnectAsync(host, port);
-            _stream = _tcp.GetStream();
+            _ws = new ClientWebSocket();
+            await _ws.ConnectAsync(new Uri(normalizedUrl), _cts.Token);
             OnConnected?.Invoke();
-            _ = Task.Run(ReadLoop);
-        }
-        catch (SocketException ex)
-        {
-            OnError?.Invoke($"Ошибка подключения: {ex.Message}");
-            Disconnect();
-            throw;
+            _ = Task.Run(ReadLoop);           // Запуск фонового чтения
         }
         catch (Exception ex)
         {
-            OnError?.Invoke($"Неизвестная ошибка подключения: {ex.Message}");
+            OnError?.Invoke($"Ошибка подключения к {normalizedUrl}: {ex.Message}");
             Disconnect();
             throw;
         }
     }
 
-    // Отправка сообщения на сервер
+    // Отправка сообщения в формате JSON
     public async Task SendAsync(object message)
     {
-        if (_stream == null || !_tcp!.Connected)
+        if (_ws == null || _ws.State != WebSocketState.Open)
         {
             if (!_isDisconnecting) OnError?.Invoke("Нет подключения к серверу");
             return;
@@ -72,9 +81,7 @@ public class NetworkService
         {
             string json = JsonSerializer.Serialize(message);
             byte[] bytes = Encoding.UTF8.GetBytes(json);
-            byte[] len = BitConverter.GetBytes(bytes.Length);
-            await _stream.WriteAsync(len, 0, 4);
-            await _stream.WriteAsync(bytes, 0, bytes.Length);
+            await _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -82,97 +89,102 @@ public class NetworkService
         }
     }
 
-    // Цикл чтения сообщений от сервера
+    // Фоновый цикл приёма сообщений
     private async Task ReadLoop()
     {
+        byte[] buffer = new byte[64 * 1024];
         try
         {
-            while (_tcp!.Connected)
+            while (_ws?.State == WebSocketState.Open && !_cts!.Token.IsCancellationRequested)
             {
-                byte[] lenBuf = new byte[4];
-                int read = await _stream!.ReadAsync(lenBuf, 0, 4);
-                if (read < 4) break;
-                int len = BitConverter.ToInt32(lenBuf, 0);
-                if (len <= 0 || len > 100 * 1024 * 1024) break;
-
-                byte[] jsonBytes = new byte[len];
-                int total = 0;
-                while (total < len)
+                // Накопление фрагментированного сообщения
+                using var ms = new MemoryStream();
+                WebSocketReceiveResult result;
+                do
                 {
-                    int r = await _stream.ReadAsync(jsonBytes, total, len - total);
-                    if (r == 0) break;
-                    total += r;
-                }
-                string json = Encoding.UTF8.GetString(jsonBytes, 0, total);
+                    result = await _ws.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                        return;
+                    }
+                    ms.Write(buffer, 0, result.Count);
+                } while (!result.EndOfMessage);
 
+                // Десериализация базового конверта
+                string json = Encoding.UTF8.GetString(ms.ToArray());
                 var msg = JsonSerializer.Deserialize<BaseMessage>(json);
                 if (msg == null) continue;
 
+                // Маршрутизация по типу сообщения
                 switch (msg.Type)
                 {
+                    case "LoginResponse":
+                        OnLoginResponse?.Invoke(msg.Payload.Deserialize<LoginResponsePayload>()!);
+                        break;
+                    case "RegisterAccountResponse":
+                        OnRegisterAccountResponse?.Invoke(msg.Payload.Deserialize<RegisterAccountResponsePayload>()!);
+                        break;
+                    case "HelloResponse":
+                        OnHelloResponse?.Invoke(msg.Payload.Deserialize<HelloResponsePayload>()!);
+                        break;
                     case "IncomingMessage":
-                        OnIncomingMessage?.Invoke(msg.Payload.Deserialize<IncomingMessagePayload>());
+                        OnIncomingMessage?.Invoke(msg.Payload.Deserialize<IncomingMessagePayload>()!);
                         break;
                     case "DeliveryStatus":
-                        OnDeliveryStatus?.Invoke(msg.Payload.Deserialize<DeliveryStatusPayload>());
+                        OnDeliveryStatus?.Invoke(msg.Payload.Deserialize<DeliveryStatusPayload>()!);
                         break;
                     case "PublicKeyResponse":
-                        OnPublicKeyResponse?.Invoke(msg.Payload.Deserialize<PublicKeyResponsePayload>());
-                        break;
-                    case "UserList":
-                        OnUserList?.Invoke(msg.Payload.Deserialize<UserListPayload>());
-                        break;
-                    case "UserProfileUpdated":
-                        OnUserProfileUpdated?.Invoke(msg.Payload.Deserialize<UserProfileUpdatedPayload>());
-                        break;
-                    case "UserInfoResponse":
-                        OnUserInfoResponse?.Invoke(msg.Payload.Deserialize<UserInfoResponsePayload>());
-                        break;
-                    case "HistoryResponse":
-                        OnHistoryResponse?.Invoke(msg.Payload.Deserialize<HistoryResponsePayload>());
+                        OnPublicKeyResponse?.Invoke(msg.Payload.Deserialize<PublicKeyResponsePayload>()!);
                         break;
                     case "ContactList":
-                        OnContactList?.Invoke(msg.Payload.Deserialize<ContactListPayload>());
+                        OnContactList?.Invoke(msg.Payload.Deserialize<ContactListPayload>()!);
                         break;
-                    case "RegisterResponse":
-                        var reg = msg.Payload.Deserialize<RegisterResponsePayload>();
-                        OnRegisterResponse?.Invoke(reg.AssignedId);
+                    case "UserProfileUpdated":
+                        OnUserProfileUpdated?.Invoke(msg.Payload.Deserialize<UserProfileUpdatedPayload>()!);
+                        break;
+                    case "UserInfoResponse":
+                        OnUserInfoResponse?.Invoke(msg.Payload.Deserialize<UserInfoResponsePayload>()!);
+                        break;
+                    case "HistoryResponse":
+                        OnHistoryResponse?.Invoke(msg.Payload.Deserialize<HistoryResponsePayload>()!);
                         break;
                     case "AddContactResponse":
-                        OnAddContactResponse?.Invoke(msg.Payload.Deserialize<AddContactResponsePayload>());
+                        OnAddContactResponse?.Invoke(msg.Payload.Deserialize<AddContactResponsePayload>()!);
                         break;
                     case "UserOnline":
                         var online = msg.Payload.Deserialize<OnlineStatusPayload>();
-                        OnUserOnline?.Invoke(online.UserId);
+                        if (online != null) OnUserOnline?.Invoke(online.UserId);
                         break;
                     case "UserOffline":
                         var offline = msg.Payload.Deserialize<OnlineStatusPayload>();
-                        OnUserOffline?.Invoke(offline.UserId);
+                        if (offline != null) OnUserOffline?.Invoke(offline.UserId);
                         break;
                     case "Error":
                         var err = msg.Payload.Deserialize<SimpleStatusPayload>();
-                        OnError?.Invoke(err.Status);
+                        OnError?.Invoke(err?.Status ?? "UnknownError");
                         break;
                 }
             }
         }
-        catch (Exception ex) when (ex is IOException || ex is ObjectDisposedException) { }
+        catch (OperationCanceledException) { }   // Штатная отмена
         catch (Exception ex)
         {
-            if (!_isDisconnecting) OnError?.Invoke($"Ошибка чтения данных: {ex.Message}");
+            if (!_isDisconnecting) OnError?.Invoke($"Ошибка сети WebSocket: {ex.Message}");
         }
         finally
         {
             OnDisconnected?.Invoke();
-            if (!_isDisconnecting) Disconnect();
+            if (!_isDisconnecting) Disconnect();  // Автоотключение при разрыве
         }
     }
 
-    // Закрытие соединения
+    // Принудительное закрытие соединения
     public void Disconnect()
     {
         _isDisconnecting = true;
-        try { _stream?.Close(); } catch { }
-        try { _tcp?.Close(); } catch { }
+        _cts?.Cancel();
+        try { _ws?.Dispose(); } catch { }
+        _ws = null;
     }
 }
