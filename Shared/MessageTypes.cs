@@ -16,15 +16,30 @@ public class BaseMessage
 }
 
 /// <summary>
-/// Запрос авторизации.
+/// Запрос отправки кода подтверждения на Email.
+/// </summary>
+public class SendEmailCodePayload
+{
+    [JsonPropertyName("Email")] public string Email { get; set; } = "";
+    [JsonPropertyName("Purpose")] public string Purpose { get; set; } = "Register"; // "Register" или "Login"
+}
+
+/// <summary>
+/// Ответ на запрос отправки кода.
+/// </summary>
+public class SendEmailCodeResponsePayload
+{
+    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidEmail", "RateLimit", "SendFailed"
+    [JsonPropertyName("Message")] public string Message { get; set; } = "";
+}
+
+/// <summary>
+/// Запрос авторизации по email/паролю.
 /// </summary>
 public class LoginPayload
 {
-    [JsonPropertyName("Email")]
-    public string Email { get; set; } = "";
-
-    [JsonPropertyName("Password")]
-    public string Password { get; set; } = "";
+    [JsonPropertyName("Email")] public string Email { get; set; } = "";
+    [JsonPropertyName("Password")] public string Password { get; set; } = "";
 }
 
 /// <summary>
@@ -32,28 +47,22 @@ public class LoginPayload
 /// </summary>
 public class LoginResponsePayload
 {
-    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidCredentials", "UserNotFound", "InvalidEmail"
+    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidCredentials", "EmailNotVerified", "UserNotFound"
     [JsonPropertyName("UserId")] public int UserId { get; set; }
     [JsonPropertyName("UserName")] public string UserName { get; set; } = "";
     [JsonPropertyName("Token")] public string Token { get; set; } = "";
 }
 
 /// <summary>
-/// Запрос регистрации нового аккаунта.
+/// Регистрация с обязательным подтверждением кодом из письма.
 /// </summary>
 public class RegisterAccountPayload
 {
-    [JsonPropertyName("Email")]
-    public string Email { get; set; } = "";
-
-    [JsonPropertyName("Password")]
-    public string Password { get; set; } = "";
-
-    [JsonPropertyName("UserName")]
-    public string UserName { get; set; } = "";
-
-    [JsonPropertyName("PublicKey")]
-    public string PublicKey { get; set; } = "";
+    [JsonPropertyName("Email")] public string Email { get; set; } = "";
+    [JsonPropertyName("Code")] public string Code { get; set; } = "";       // код из письма
+    [JsonPropertyName("Password")] public string Password { get; set; } = "";
+    [JsonPropertyName("UserName")] public string UserName { get; set; } = "";
+    [JsonPropertyName("PublicKey")] public string PublicKey { get; set; } = "";
 }
 
 /// <summary>
@@ -61,7 +70,7 @@ public class RegisterAccountPayload
 /// </summary>
 public class RegisterAccountResponsePayload
 {
-    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "UserExists", "InvalidEmail", "Error"
+    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidCode", "CodeExpired", "UserExists", "Error"
     [JsonPropertyName("AssignedId")] public int AssignedId { get; set; }
     [JsonPropertyName("Token")] public string Token { get; set; } = "";
 }
@@ -138,10 +147,10 @@ public class SendMessagePayload
 {
     [JsonPropertyName("ReceiverId")] public int ReceiverId { get; set; }
     [JsonPropertyName("MessageId")] public string MessageId { get; set; } = "";
-    [JsonPropertyName("EncryptedKey")] public string? EncryptedKey { get; set; }      // ключ для получателя
+    [JsonPropertyName("EncryptedKey")] public string? EncryptedKey { get; set; }         // ключ для получателя
     [JsonPropertyName("EncryptedKeySelf")] public string? EncryptedKeySelf { get; set; } // ключ для себя
     [JsonPropertyName("EncryptedData")] public EncryptedData? EncryptedData { get; set; }
-    [JsonPropertyName("ContentType")] public string ContentType { get; set; } = "Text"; // "Text" | "File"
+    [JsonPropertyName("ContentType")] public string ContentType { get; set; } = "Text";  // "Text" | "File"
     [JsonPropertyName("FileName")] public string? FileName { get; set; }
     [JsonPropertyName("FileSize")] public long FileSize { get; set; }
     [JsonPropertyName("FileTransferId")] public string? FileTransferId { get; set; }

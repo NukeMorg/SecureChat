@@ -7,7 +7,7 @@ using SecureChat.Common;
 namespace SecureChat.Server;
 
 /// <summary>
-/// SQLite-база сервера: пользователи, сессии, сообщения, контакты.
+/// SQLite-база сервера: пользователи, сессии, коды подтверждения email, сообщения, контакты.
 /// Настроена на многопоточную работу (WAL + busy_timeout).
 /// </summary>
 public class Database
@@ -17,7 +17,7 @@ public class Database
     public string ConnectionString => cs;
 
     /// <summary>
-    /// Создаёт таблицы, включает WAL и при необходимости добавляет колонку Email.
+    /// Создаёт таблицы и включает WAL/busy_timeout. Старые БД совместимы через CREATE IF NOT EXISTS.
     /// </summary>
     public void Initialize()
     {
@@ -38,6 +38,11 @@ public class Database
                 Salt TEXT,
                 PublicKey TEXT NOT NULL,
                 UserName TEXT DEFAULT 'User'
+            );
+            CREATE TABLE IF NOT EXISTS EmailVerifications (
+                Email TEXT PRIMARY KEY,
+                Code TEXT NOT NULL,
+                ExpiresAt TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS Sessions (
                 Token TEXT PRIMARY KEY,
@@ -72,31 +77,86 @@ public class Database
                 FOREIGN KEY (ContactId) REFERENCES Clients(Id)
             );";
         cmd.ExecuteNonQuery();
+    }
 
-        // Проверяем наличие колонки Email (безопасная миграция старой БД)
-        var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        cmd.CommandText = "PRAGMA table_info(Clients);";
-        using (var reader = cmd.ExecuteReader())
+    /// <summary>
+    /// Сохраняет/перезаписывает код подтверждения для email (UPSERT по Email).
+    /// </summary>
+    public void SaveVerificationCode(string email, string code, TimeSpan ttl)
+    {
+        string normEmail = email.Trim().ToLowerInvariant();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO EmailVerifications (Email, Code, ExpiresAt)
+            VALUES (@email, @code, @expires)
+            ON CONFLICT(Email) DO UPDATE SET Code = @code, ExpiresAt = @expires;";
+        cmd.Parameters.AddWithValue("@email", normEmail);
+        cmd.Parameters.AddWithValue("@code", code);
+        cmd.Parameters.AddWithValue("@expires", DateTime.UtcNow.Add(ttl).ToString("o"));
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// Результат проверки кода подтверждения.
+    /// </summary>
+    public enum CodeVerifyResult
+    {
+        Valid,
+        Invalid,
+        Expired
+    }
+
+    /// <summary>
+    /// Проверяет код и удаляет его при успехе (одноразовый).
+    /// Просроченный код тоже удаляется.
+    /// </summary>
+    public CodeVerifyResult VerifyAndConsumeCode(string email, string code)
+    {
+        string normEmail = email.Trim().ToLowerInvariant();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Code, ExpiresAt FROM EmailVerifications WHERE Email = @email";
+        cmd.Parameters.AddWithValue("@email", normEmail);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return CodeVerifyResult.Invalid;
+
+        string savedCode = reader.GetString(0);
+        DateTime expiresAt = DateTime.Parse(reader.GetString(1));
+
+        // Срок истёк — удаляем и сообщаем об этом
+        if (DateTime.UtcNow > expiresAt)
         {
-            while (reader.Read())
-            {
-                existingColumns.Add(reader.GetString(1));
-            }
+            reader.Close();
+            DeleteVerificationCode(normEmail);
+            return CodeVerifyResult.Expired;
         }
 
-        if (!existingColumns.Contains("Email"))
+        // Код не совпал — оставляем запись (можно повторить попытку)
+        if (savedCode != code.Trim())
         {
-            cmd.CommandText = "ALTER TABLE Clients ADD COLUMN Email TEXT UNIQUE;";
-            try
-            {
-                cmd.ExecuteNonQuery();
-                Console.WriteLine("Миграция: колонка Email успешно добавлена в таблицу Clients.");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка при добавлении колонки Email: {ex.Message}");
-            }
+            return CodeVerifyResult.Invalid;
         }
+
+        // Успех — код одноразовый
+        reader.Close();
+        DeleteVerificationCode(normEmail);
+        return CodeVerifyResult.Valid;
+    }
+
+    /// <summary>
+    /// Удаляет сохранённый код подтверждения для email.
+    /// </summary>
+    private void DeleteVerificationCode(string email)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM EmailVerifications WHERE Email = @email";
+        cmd.Parameters.AddWithValue("@email", email);
+        cmd.ExecuteNonQuery();
     }
 
     /// <summary>
@@ -124,7 +184,7 @@ public class Database
     }
 
     /// <summary>
-    /// Регистрирует пользователя и сразу создаёт сессию. null — email занят.
+    /// Регистрирует пользователя и сразу создаёт сессию. null — email уже занят.
     /// </summary>
     public (int id, string token)? RegisterUser(string email, string password, string userName, string publicKey)
     {
@@ -175,7 +235,7 @@ public class Database
             string salt = reader.GetString(3);
             if (VerifyPassword(password, hash, salt))
             {
-                // Закрываем reader, чтобы освободить соединение до INSERT
+                // Закрываем reader, чтобы освободить соединение до INSERT сессии
                 reader.Close();
                 string token = CreateSessionInternal(conn, id);
                 return (id, name, token);
@@ -185,7 +245,7 @@ public class Database
     }
 
     /// <summary>
-    /// Создаёт сессию, используя уже открытое соединение (для транзакционных методов).
+    /// Создаёт сессию в рамках уже открытого соединения (для транзакционных методов).
     /// </summary>
     private string CreateSessionInternal(SqliteConnection conn, int userId)
     {
