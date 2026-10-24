@@ -10,8 +10,8 @@ using SecureChat.Common;
 namespace SecureChat.Client.View;
 
 /// <summary>
-/// Окно входа/регистрации: подключение к серверу, авторизация по email, сохранение конфига.
-/// Работает с общим экземпляром NetworkService (переживает открытие/закрытие окна).
+/// Окно входа/регистрации: подключение к серверу, авторизация по email,
+/// запрос кода подтверждения и регистрация с проверкой кода.
 /// </summary>
 public partial class LoginWindow : Window
 {
@@ -28,13 +28,15 @@ public partial class LoginWindow : Window
     public NetworkService Network { get; private set; }
 
     private CryptoService _crypto = new();
-    // TCS для ожидания ответов сервера на запросы логина/регистрации
+    // TCS для ожидания ответов сервера
     private TaskCompletionSource<LoginResponsePayload>? _loginTcs;
     private TaskCompletionSource<RegisterAccountResponsePayload>? _registerTcs;
+    private TaskCompletionSource<SendEmailCodeResponsePayload>? _codeTcs;
 
     // Ссылки на делегаты — нужны, чтобы отписаться от событий перед закрытием окна
     private readonly Action<LoginResponsePayload> _loginHandler;
     private readonly Action<RegisterAccountResponsePayload> _registerHandler;
+    private readonly Action<SendEmailCodeResponsePayload> _codeHandler;
     private readonly Action<string> _errorHandler;
 
     /// <summary>
@@ -55,10 +57,12 @@ public partial class LoginWindow : Window
         // Сохраняем ссылки на делегаты для последующей отписки
         _loginHandler = p => _loginTcs?.TrySetResult(p);
         _registerHandler = p => _registerTcs?.TrySetResult(p);
+        _codeHandler = p => _codeTcs?.TrySetResult(p);
         _errorHandler = err => Dispatcher.Invoke(() => StatusTextBlock.Text = $"Ошибка: {err}");
 
         Network.OnLoginResponse += _loginHandler;
         Network.OnRegisterAccountResponse += _registerHandler;
+        Network.OnSendEmailCodeResponse += _codeHandler;
         Network.OnError += _errorHandler;
 
         LoadSavedConfig();
@@ -71,6 +75,7 @@ public partial class LoginWindow : Window
     {
         Network.OnLoginResponse -= _loginHandler;
         Network.OnRegisterAccountResponse -= _registerHandler;
+        Network.OnSendEmailCodeResponse -= _codeHandler;
         Network.OnError -= _errorHandler;
     }
 
@@ -123,13 +128,14 @@ public partial class LoginWindow : Window
     }
 
     /// <summary>
-    /// Переключение режимов "Вход" / "Регистрация".
+    /// Переключение режимов "Вход" / "Регистрация" (показ панели имени и поля кода).
     /// </summary>
     private void ModeRadio_Checked(object sender, RoutedEventArgs e)
     {
-        if (NamePanel == null || SubmitButton == null) return;
+        if (NamePanel == null || CodePanel == null || SubmitButton == null) return;
         bool isRegister = RegisterRadio.IsChecked == true;
         NamePanel.Visibility = isRegister ? Visibility.Visible : Visibility.Collapsed;
+        CodePanel.Visibility = isRegister ? Visibility.Visible : Visibility.Collapsed;
         SubmitButton.Content = isRegister ? "Зарегистрироваться" : "Войти";
         StatusTextBlock.Text = "";
     }
@@ -151,7 +157,76 @@ public partial class LoginWindow : Window
     }
 
     /// <summary>
-    /// Обрабатывает нажатие кнопки: валидация, подключение, отправка запроса, ожидание ответа.
+    /// Запрос кода подтверждения на указанный email (режим регистрации).
+    /// </summary>
+    private async void GetCodeButton_Click(object sender, RoutedEventArgs e)
+    {
+        string email = LoginBox.Text.Trim();
+        if (string.IsNullOrEmpty(email) || !IsValidEmail(email))
+        {
+            StatusTextBlock.Text = "Сначала введите корректный Email.";
+            return;
+        }
+
+        GetCodeButton.IsEnabled = false;
+        StatusTextBlock.Foreground = System.Windows.Media.Brushes.Gray;
+        StatusTextBlock.Text = "Отправка проверочного кода...";
+
+        try
+        {
+            // Подключаемся, если ещё нет соединения
+            if (!Network.IsConnected)
+            {
+                await Network.ConnectAsync(StaticServerUrl);
+            }
+
+            _codeTcs = new TaskCompletionSource<SendEmailCodeResponsePayload>();
+            await Network.SendAsync(new
+            {
+                Type = "SendEmailCode",
+                Payload = new SendEmailCodePayload
+                {
+                    Email = email,
+                    Purpose = "Register"
+                }
+            });
+
+            // Ожидаем ответ с таймаутом 8 сек
+            var completed = await Task.WhenAny(_codeTcs.Task, Task.Delay(8000));
+            if (completed != _codeTcs.Task)
+            {
+                StatusTextBlock.Foreground = System.Windows.Media.Brushes.Red;
+                StatusTextBlock.Text = "Таймаут отправки кода.";
+                GetCodeButton.IsEnabled = true;
+                return;
+            }
+
+            var resp = await _codeTcs.Task;
+            if (resp.Status == "Ok")
+            {
+                StatusTextBlock.Foreground = System.Windows.Media.Brushes.LimeGreen;
+                StatusTextBlock.Text = "Код подтверждения отправлен (проверьте почту или консоль сервера)!";
+            }
+            else
+            {
+                // Сервер вернул готовое сообщение об ошибке
+                StatusTextBlock.Foreground = System.Windows.Media.Brushes.Red;
+                StatusTextBlock.Text = resp.Message;
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusTextBlock.Foreground = System.Windows.Media.Brushes.Red;
+            StatusTextBlock.Text = $"Ошибка: {ex.Message}";
+        }
+        finally
+        {
+            GetCodeButton.IsEnabled = true;
+        }
+    }
+
+    /// <summary>
+    /// Основная кнопка: вход или регистрация (с обязательной проверкой кода).
     /// </summary>
     private async void SubmitButton_Click(object sender, RoutedEventArgs e)
     {
@@ -160,6 +235,7 @@ public partial class LoginWindow : Window
 
         if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(password))
         {
+            StatusTextBlock.Foreground = System.Windows.Media.Brushes.Red;
             StatusTextBlock.Text = "Заполните почту и пароль.";
             return;
         }
@@ -167,11 +243,13 @@ public partial class LoginWindow : Window
         // Локальная проверка email до обращения к серверу
         if (!IsValidEmail(email))
         {
+            StatusTextBlock.Foreground = System.Windows.Media.Brushes.Red;
             StatusTextBlock.Text = "Введите корректный Email.";
             return;
         }
 
         SubmitButton.IsEnabled = false;
+        StatusTextBlock.Foreground = System.Windows.Media.Brushes.Gray;
         StatusTextBlock.Text = "Подключение к серверу...";
 
         try
@@ -185,6 +263,15 @@ public partial class LoginWindow : Window
             if (RegisterRadio.IsChecked == true)
             {
                 // === Режим регистрации ===
+                string code = CodeBox.Text.Trim();
+                if (string.IsNullOrEmpty(code) || code.Length != 6)
+                {
+                    StatusTextBlock.Foreground = System.Windows.Media.Brushes.Red;
+                    StatusTextBlock.Text = "Введите 6-значный проверочный код из письма.";
+                    SubmitButton.IsEnabled = true;
+                    return;
+                }
+
                 string name = NameBox.Text.Trim();
 
                 // Генерируем RSA-ключи, если их ещё нет
@@ -202,16 +289,18 @@ public partial class LoginWindow : Window
                     Payload = new RegisterAccountPayload
                     {
                         Email = email,
+                        Code = code,
                         Password = password,
                         UserName = string.IsNullOrEmpty(name) ? email : name,
                         PublicKey = PublicKeyPem
                     }
                 });
 
-                // Ожидаем ответ с таймаутом 7 сек
-                var completed = await Task.WhenAny(_registerTcs.Task, Task.Delay(7000));
+                // Ожидаем ответ с таймаутом 8 сек
+                var completed = await Task.WhenAny(_registerTcs.Task, Task.Delay(8000));
                 if (completed != _registerTcs.Task)
                 {
+                    StatusTextBlock.Foreground = System.Windows.Media.Brushes.Red;
                     StatusTextBlock.Text = "Таймаут регистрации на сервере.";
                     SubmitButton.IsEnabled = true;
                     return;
@@ -233,11 +322,13 @@ public partial class LoginWindow : Window
                 }
                 else
                 {
-                    // Разные сообщения для разных кодов ошибок сервера
+                    // Разбор кодов ошибок сервера (в т.ч. новых — InvalidCode/CodeExpired)
+                    StatusTextBlock.Foreground = System.Windows.Media.Brushes.Red;
                     StatusTextBlock.Text = resp.Status switch
                     {
+                        "InvalidCode" => "Неверный код подтверждения.",
+                        "CodeExpired" => "Срок действия кода истек. Запросите новый.",
                         "UserExists" => "Пользователь с такой почтой уже существует.",
-                        "InvalidEmail" => "Некорректный email.",
                         _ => $"Ошибка регистрации: {resp.Status}"
                     };
                     SubmitButton.IsEnabled = true;
@@ -257,10 +348,11 @@ public partial class LoginWindow : Window
                     }
                 });
 
-                // Ожидаем ответ с таймаутом 7 сек
-                var completed = await Task.WhenAny(_loginTcs.Task, Task.Delay(7000));
+                // Ожидаем ответ с таймаутом 8 сек
+                var completed = await Task.WhenAny(_loginTcs.Task, Task.Delay(8000));
                 if (completed != _loginTcs.Task)
                 {
+                    StatusTextBlock.Foreground = System.Windows.Media.Brushes.Red;
                     StatusTextBlock.Text = "Таймаут авторизации.";
                     SubmitButton.IsEnabled = true;
                     return;
@@ -291,6 +383,7 @@ public partial class LoginWindow : Window
                 }
                 else
                 {
+                    StatusTextBlock.Foreground = System.Windows.Media.Brushes.Red;
                     StatusTextBlock.Text = resp.Status == "InvalidCredentials"
                         ? "Неверная почта или пароль."
                         : "Пользователь не найден.";
@@ -300,6 +393,7 @@ public partial class LoginWindow : Window
         }
         catch (Exception ex)
         {
+            StatusTextBlock.Foreground = System.Windows.Media.Brushes.Red;
             StatusTextBlock.Text = $"Ошибка: {ex.Message}";
             SubmitButton.IsEnabled = true;
         }
