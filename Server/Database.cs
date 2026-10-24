@@ -2,27 +2,38 @@
 using System;
 using System.Collections.Generic;
 using System.Security.Cryptography;
-using System.Text;
 using SecureChat.Common;
 
 namespace SecureChat.Server;
 
-// База данных SQLite: пользователи, сессии, сообщения, контакты
+/// <summary>
+/// SQLite-база сервера: пользователи, сессии, сообщения, контакты.
+/// Настроена на многопоточную работу (WAL + busy_timeout).
+/// </summary>
 public class Database
 {
-    readonly string cs = "Data Source=server.db";
+    // Default Timeout = 10 сек ожидания освобождения БД перед ошибкой "database is locked"
+    readonly string cs = "Data Source=server.db;Default Timeout=10;";
     public string ConnectionString => cs;
 
-    // Создание схемы БД (вызывается один раз при старте сервера)
+    /// <summary>
+    /// Создаёт таблицы, включает WAL и при необходимости добавляет колонку Email.
+    /// </summary>
     public void Initialize()
     {
         using var conn = new SqliteConnection(cs);
         conn.Open();
         var cmd = conn.CreateCommand();
+
+        // WAL — параллельное чтение/запись; busy_timeout — ждать блокировку, а не падать
         cmd.CommandText = @"
+            PRAGMA journal_mode = WAL;
+            PRAGMA busy_timeout = 5000;
+            PRAGMA synchronous = NORMAL;
+
             CREATE TABLE IF NOT EXISTS Clients (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                Login TEXT UNIQUE,
+                Email TEXT UNIQUE,
                 PasswordHash TEXT,
                 Salt TEXT,
                 PublicKey TEXT NOT NULL,
@@ -62,30 +73,35 @@ public class Database
             );";
         cmd.ExecuteNonQuery();
 
-        // Миграция: добавляем столбцы авторизации, если таблица была создана в старой версии
-        try
+        // Проверяем наличие колонки Email (безопасная миграция старой БД)
+        var existingColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        cmd.CommandText = "PRAGMA table_info(Clients);";
+        using (var reader = cmd.ExecuteReader())
         {
-            cmd.CommandText = "ALTER TABLE Clients ADD COLUMN Login TEXT UNIQUE";
-            cmd.ExecuteNonQuery();
+            while (reader.Read())
+            {
+                existingColumns.Add(reader.GetString(1));
+            }
         }
-        catch { }
 
-        try
+        if (!existingColumns.Contains("Email"))
         {
-            cmd.CommandText = "ALTER TABLE Clients ADD COLUMN PasswordHash TEXT";
-            cmd.ExecuteNonQuery();
+            cmd.CommandText = "ALTER TABLE Clients ADD COLUMN Email TEXT UNIQUE;";
+            try
+            {
+                cmd.ExecuteNonQuery();
+                Console.WriteLine("Миграция: колонка Email успешно добавлена в таблицу Clients.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Ошибка при добавлении колонки Email: {ex.Message}");
+            }
         }
-        catch { }
-
-        try
-        {
-            cmd.CommandText = "ALTER TABLE Clients ADD COLUMN Salt TEXT";
-            cmd.ExecuteNonQuery();
-        }
-        catch { }
     }
 
-    // PBKDF2-SHA256: генерирует хеш и соль для пароля
+    /// <summary>
+    /// PBKDF2-SHA256: возвращает Base64-хеш и Base64-соль.
+    /// </summary>
     public static (string hash, string salt) HashPassword(string password)
     {
         byte[] saltBytes = RandomNumberGenerator.GetBytes(16);
@@ -96,7 +112,9 @@ public class Database
         return (hash, salt);
     }
 
-    // Сравнение введённого пароля с сохранённым хешем
+    /// <summary>
+    /// Проверяет пароль по сохранённым хешу и соли.
+    /// </summary>
     public static bool VerifyPassword(string password, string storedHash, string storedSalt)
     {
         byte[] saltBytes = Convert.FromBase64String(storedSalt);
@@ -105,44 +123,49 @@ public class Database
         return Convert.ToBase64String(hashBytes) == storedHash;
     }
 
-    // Регистрация нового пользователя: возвращает ID и токен сессии
-    public (int id, string token)? RegisterUser(string login, string password, string userName, string publicKey)
+    /// <summary>
+    /// Регистрирует пользователя и сразу создаёт сессию. null — email занят.
+    /// </summary>
+    public (int id, string token)? RegisterUser(string email, string password, string userName, string publicKey)
     {
+        string normEmail = email.Trim().ToLowerInvariant();
         using var conn = new SqliteConnection(cs);
         conn.Open();
 
-        // Логин должен быть уникальным
+        // Проверка уникальности email (без учёта регистра)
         var checkCmd = conn.CreateCommand();
-        checkCmd.CommandText = "SELECT COUNT(*) FROM Clients WHERE Login = @login";
-        checkCmd.Parameters.AddWithValue("@login", login);
+        checkCmd.CommandText = "SELECT COUNT(*) FROM Clients WHERE LOWER(Email) = @email";
+        checkCmd.Parameters.AddWithValue("@email", normEmail);
         if ((long)checkCmd.ExecuteScalar()! > 0) return null;
 
-        // Хешируем пароль и вставляем запись
         var (hash, salt) = HashPassword(password);
         var insertCmd = conn.CreateCommand();
         insertCmd.CommandText = @"
-            INSERT INTO Clients (Login, PasswordHash, Salt, UserName, PublicKey)
-            VALUES (@login, @hash, @salt, @name, @key);
+            INSERT INTO Clients (Email, PasswordHash, Salt, UserName, PublicKey)
+            VALUES (@email, @hash, @salt, @name, @key);
             SELECT last_insert_rowid();";
-        insertCmd.Parameters.AddWithValue("@login", login);
+        insertCmd.Parameters.AddWithValue("@email", normEmail);
         insertCmd.Parameters.AddWithValue("@hash", hash);
         insertCmd.Parameters.AddWithValue("@salt", salt);
-        insertCmd.Parameters.AddWithValue("@name", string.IsNullOrWhiteSpace(userName) ? login : userName);
+        insertCmd.Parameters.AddWithValue("@name", string.IsNullOrWhiteSpace(userName) ? normEmail : userName);
         insertCmd.Parameters.AddWithValue("@key", publicKey);
 
         int id = Convert.ToInt32(insertCmd.ExecuteScalar());
-        string token = CreateSession(id);
+        string token = CreateSessionInternal(conn, id);
         return (id, token);
     }
 
-    // Авторизация: проверка пароля и создание сессии
-    public (int id, string name, string token)? Authenticate(string login, string password)
+    /// <summary>
+    /// Проверяет логин/пароль и создаёт сессию. null — неверные данные.
+    /// </summary>
+    public (int id, string name, string token)? Authenticate(string email, string password)
     {
+        string normEmail = email.Trim().ToLowerInvariant();
         using var conn = new SqliteConnection(cs);
         conn.Open();
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT Id, UserName, PasswordHash, Salt FROM Clients WHERE Login = @login";
-        cmd.Parameters.AddWithValue("@login", login);
+        cmd.CommandText = "SELECT Id, UserName, PasswordHash, Salt FROM Clients WHERE LOWER(Email) = @email";
+        cmd.Parameters.AddWithValue("@email", normEmail);
         using var reader = cmd.ExecuteReader();
         if (reader.Read())
         {
@@ -152,19 +175,21 @@ public class Database
             string salt = reader.GetString(3);
             if (VerifyPassword(password, hash, salt))
             {
-                string token = CreateSession(id);
+                // Закрываем reader, чтобы освободить соединение до INSERT
+                reader.Close();
+                string token = CreateSessionInternal(conn, id);
                 return (id, name, token);
             }
         }
         return null;
     }
 
-    // Создание новой сессии и возврат токена
-    public string CreateSession(int userId)
+    /// <summary>
+    /// Создаёт сессию, используя уже открытое соединение (для транзакционных методов).
+    /// </summary>
+    private string CreateSessionInternal(SqliteConnection conn, int userId)
     {
         string token = Guid.NewGuid().ToString("N");
-        using var conn = new SqliteConnection(cs);
-        conn.Open();
         var cmd = conn.CreateCommand();
         cmd.CommandText = "INSERT INTO Sessions (Token, UserId, CreatedAt) VALUES (@token, @uid, @time)";
         cmd.Parameters.AddWithValue("@token", token);
@@ -174,7 +199,19 @@ public class Database
         return token;
     }
 
-    // Проверка токена сессии → UserId или null
+    /// <summary>
+    /// Публичный вариант создания сессии — открывает соединение сам.
+    /// </summary>
+    public string CreateSession(int userId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        return CreateSessionInternal(conn, userId);
+    }
+
+    /// <summary>
+    /// Возвращает UserId по токену или null, если сессии нет.
+    /// </summary>
     public int? ValidateSession(string token)
     {
         using var conn = new SqliteConnection(cs);
@@ -186,6 +223,9 @@ public class Database
         return result != null ? Convert.ToInt32(result) : null;
     }
 
+    /// <summary>
+    /// Есть ли пользователь с таким Id.
+    /// </summary>
     public bool UserExists(int id)
     {
         using var conn = new SqliteConnection(cs);
@@ -196,6 +236,9 @@ public class Database
         return (long)cmd.ExecuteScalar()! > 0;
     }
 
+    /// <summary>
+    /// Публичный ключ пользователя (PEM) или null.
+    /// </summary>
     public string? GetPublicKey(int id)
     {
         using var conn = new SqliteConnection(cs);
@@ -206,6 +249,9 @@ public class Database
         return cmd.ExecuteScalar() as string;
     }
 
+    /// <summary>
+    /// Обновляет отображаемое имя пользователя.
+    /// </summary>
     public void UpdateUserName(int id, string userName)
     {
         using var conn = new SqliteConnection(cs);
@@ -217,6 +263,9 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// Возвращает UserName по Id или null.
+    /// </summary>
     public string? GetUserName(int id)
     {
         using var conn = new SqliteConnection(cs);
@@ -227,7 +276,9 @@ public class Database
         return cmd.ExecuteScalar() as string;
     }
 
-    // Сохранение сообщения (текст или файл) в БД
+    /// <summary>
+    /// Сохраняет (или перезаписывает по MessageId) сообщение.
+    /// </summary>
     public void SaveMessage(string messageId, int senderId, int receiverId,
                             string? encryptedKey, string? nonce, string? ciphertext, string? tag,
                             string contentType, string? fileName, long fileSize, string? fileTransferId,
@@ -259,7 +310,9 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    // Обновление статуса доставки (например, "Delivered")
+    /// <summary>
+    /// Обновляет статус сообщения (Sent / Delivered / Read).
+    /// </summary>
     public void UpdateMessageStatus(string messageId, string status)
     {
         using var conn = new SqliteConnection(cs);
@@ -271,7 +324,9 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    // Поиск отправителя по ID сообщения (для уведомления о доставке)
+    /// <summary>
+    /// Возвращает отправителя по MessageId (для подтверждений) или null.
+    /// </summary>
     public int? GetSenderByMessageId(string messageId)
     {
         using var conn = new SqliteConnection(cs);
@@ -283,7 +338,9 @@ public class Database
         return result != null ? Convert.ToInt32(result) : null;
     }
 
-    // История переписки двух пользователей в хронологическом порядке
+    /// <summary>
+    /// История переписки между двумя пользователями в хронологическом порядке.
+    /// </summary>
     public List<HistoryMessage> GetHistory(int userId1, int userId2)
     {
         var list = new List<HistoryMessage>();
@@ -323,17 +380,22 @@ public class Database
         return list;
     }
 
-    // Двусторонняя связь контактов (симметрично)
+    /// <summary>
+    /// Добавляет контакт в обе стороны (симметрично).
+    /// </summary>
     public void AddContact(int userId, int contactId)
     {
         using var conn = new SqliteConnection(cs);
         conn.Open();
         var cmd = conn.CreateCommand();
+
+        // Прямая связь
         cmd.CommandText = "INSERT OR IGNORE INTO Contacts (UserId, ContactId) VALUES (@uid, @cid)";
         cmd.Parameters.AddWithValue("@uid", userId);
         cmd.Parameters.AddWithValue("@cid", contactId);
         cmd.ExecuteNonQuery();
 
+        // Обратная связь
         cmd.CommandText = "INSERT OR IGNORE INTO Contacts (UserId, ContactId) VALUES (@uid2, @cid2)";
         cmd.Parameters.Clear();
         cmd.Parameters.AddWithValue("@uid2", contactId);
@@ -341,7 +403,9 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    // ID всех контактов пользователя
+    /// <summary>
+    /// Список Id контактов пользователя.
+    /// </summary>
     public List<int> GetContactIds(int userId)
     {
         var ids = new List<int>();

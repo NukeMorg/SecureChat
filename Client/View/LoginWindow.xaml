@@ -1,7 +1,7 @@
 ﻿<Window x:Class="SecureChat.Client.View.LoginWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SecureChat - Корпоративный вход" Height="460" Width="380"
+        Title="SecureChat - Корпоративный вход" Height="416" Width="380"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         Background="{DynamicResource WindowBackground}"
         Foreground="{DynamicResource ForegroundColor}">
@@ -18,40 +18,29 @@
             <TextBlock Text="Корпоративный мессенджер с оконечным шифрованием" FontSize="11" Foreground="{DynamicResource StatusForeground}" Margin="0,4,0,0"/>
         </StackPanel>
 
-        <!-- Переключатель режима: Вход / Регистрация -->
         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,16">
             <RadioButton x:Name="LoginRadio" Content="Вход" IsChecked="True" Checked="ModeRadio_Checked" Margin="0,0,16,0" Foreground="{DynamicResource ForegroundColor}"/>
             <RadioButton x:Name="RegisterRadio" Content="Регистрация нового сотрудника" Checked="ModeRadio_Checked" Foreground="{DynamicResource ForegroundColor}"/>
         </StackPanel>
 
         <StackPanel Grid.Row="2">
-            <!-- Логин -->
-            <TextBlock Text="Логин или Email:" FontSize="12" Margin="0,0,0,4" Foreground="{DynamicResource ForegroundColor}"/>
+            <TextBlock Text="Email:" FontSize="12" Margin="0,0,0,4" Foreground="{DynamicResource ForegroundColor}"/>
             <TextBox x:Name="LoginBox" Height="28" Padding="4" Margin="0,0,0,10"
                      Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}" BorderBrush="{DynamicResource StatusForeground}"/>
 
-            <!-- Имя (только при регистрации) -->
             <StackPanel x:Name="NamePanel" Visibility="Collapsed" Margin="0,0,0,10">
                 <TextBlock Text="ФИО сотрудника:" FontSize="12" Margin="0,0,0,4" Foreground="{DynamicResource ForegroundColor}"/>
                 <TextBox x:Name="NameBox" Height="28" Padding="4"
                          Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}" BorderBrush="{DynamicResource StatusForeground}"/>
             </StackPanel>
 
-            <!-- Пароль -->
             <TextBlock Text="Пароль:" FontSize="12" Margin="0,0,0,4" Foreground="{DynamicResource ForegroundColor}"/>
             <PasswordBox x:Name="PasswordBox" Height="28" Padding="4" Margin="0,0,0,10"
                          Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}" BorderBrush="{DynamicResource StatusForeground}"/>
 
-            <!-- Сервер WebSocket -->
-            <TextBlock Text="Адрес сервера WebSocket:" FontSize="12" Margin="0,0,0,4" Foreground="{DynamicResource ForegroundColor}"/>
-            <TextBox x:Name="ServerUrlBox" Text="ws://localhost:9000/" Height="28" Padding="4" Margin="0,0,0,10"
-                     Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}" BorderBrush="{DynamicResource StatusForeground}"/>
-
-            <!-- Статус/ошибка -->
             <TextBlock x:Name="StatusTextBlock" Text="" Foreground="#FFF44336" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
         </StackPanel>
 
-        <!-- Кнопка действия -->
         <Button x:Name="SubmitButton" Grid.Row="3" Content="Войти" Height="34" FontSize="13" FontWeight="SemiBold"
                 Background="#FF1E88E5" Foreground="White" BorderThickness="0" Click="SubmitButton_Click" Cursor="Hand"/>
     </Grid>

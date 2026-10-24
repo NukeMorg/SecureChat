@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Net.Mail;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -8,33 +9,74 @@ using SecureChat.Common;
 
 namespace SecureChat.Client.View;
 
+/// <summary>
+/// Окно входа/регистрации: подключение к серверу, авторизация по email, сохранение конфига.
+/// Работает с общим экземпляром NetworkService (переживает открытие/закрытие окна).
+/// </summary>
 public partial class LoginWindow : Window
 {
-    // Данные успешной авторизации, передаются в MainWindow
+    // Адрес сервера (замените на реальный IP при развёртывании)
+    public const string StaticServerUrl = "ws://localhost:9000/";
+
+    // Данные успешно аутентифицированного пользователя
     public int AuthenticatedUserId { get; private set; }
     public string AuthenticatedUserName { get; private set; } = "User";
     public string Token { get; private set; } = "";
-    public string ServerUrl { get; private set; } = "ws://localhost:9000/";
+    public string ServerUrl => StaticServerUrl;
     public string PublicKeyPem { get; private set; } = "";
     public string PrivateKeyPem { get; private set; } = "";
-    public NetworkService Network { get; private set; } = new();
+    public NetworkService Network { get; private set; }
 
     private CryptoService _crypto = new();
-    private TaskCompletionSource<LoginResponsePayload>? _loginTcs;      // Ожидание ответа на логин
-    private TaskCompletionSource<RegisterAccountResponsePayload>? _registerTcs; // Ожидание ответа на регистрацию
+    // TCS для ожидания ответов сервера на запросы логина/регистрации
+    private TaskCompletionSource<LoginResponsePayload>? _loginTcs;
+    private TaskCompletionSource<RegisterAccountResponsePayload>? _registerTcs;
 
-    public LoginWindow()
+    // Ссылки на делегаты — нужны, чтобы отписаться от событий перед закрытием окна
+    private readonly Action<LoginResponsePayload> _loginHandler;
+    private readonly Action<RegisterAccountResponsePayload> _registerHandler;
+    private readonly Action<string> _errorHandler;
+
+    /// <summary>
+    /// Конструктор для XAML-дизайнера — создаёт собственный NetworkService.
+    /// </summary>
+    public LoginWindow() : this(new NetworkService())
+    {
+    }
+
+    /// <summary>
+    /// Рабочий конструктор: использует общий (постоянный) NetworkService приложения.
+    /// </summary>
+    public LoginWindow(NetworkService network)
     {
         InitializeComponent();
-        // Подписка на ответы сервера: резолвим ожидающие TCS
-        Network.OnLoginResponse += p => _loginTcs?.TrySetResult(p);
-        Network.OnRegisterAccountResponse += p => _registerTcs?.TrySetResult(p);
-        Network.OnError += err => Dispatcher.Invoke(() => StatusTextBlock.Text = $"Ошибка: {err}");
+        Network = network;
+
+        // Сохраняем ссылки на делегаты для последующей отписки
+        _loginHandler = p => _loginTcs?.TrySetResult(p);
+        _registerHandler = p => _registerTcs?.TrySetResult(p);
+        _errorHandler = err => Dispatcher.Invoke(() => StatusTextBlock.Text = $"Ошибка: {err}");
+
+        Network.OnLoginResponse += _loginHandler;
+        Network.OnRegisterAccountResponse += _registerHandler;
+        Network.OnError += _errorHandler;
 
         LoadSavedConfig();
     }
 
-    // Загрузка сохранённых настроек из %AppData%\SecureChat\config.json
+    /// <summary>
+    /// Отписывается от событий NetworkService, чтобы не тянуть ссылку на закрытое окно.
+    /// </summary>
+    private void UnsubscribeNetworkHandlers()
+    {
+        Network.OnLoginResponse -= _loginHandler;
+        Network.OnRegisterAccountResponse -= _registerHandler;
+        Network.OnError -= _errorHandler;
+    }
+
+    /// <summary>
+    /// Загружает сохранённый email и ключи из %AppData%\SecureChat\config.json.
+    /// </summary>
     private void LoadSavedConfig()
     {
         try
@@ -46,8 +88,6 @@ public partial class LoginWindow : Window
                 var cfg = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, string>>(File.ReadAllText(configFile));
                 if (cfg != null)
                 {
-                    if (cfg.TryGetValue("ServerAddress", out var srv) && !string.IsNullOrWhiteSpace(srv))
-                        ServerUrlBox.Text = srv;
                     if (cfg.TryGetValue("Login", out var log) && !string.IsNullOrWhiteSpace(log))
                         LoginBox.Text = log;
                     if (cfg.TryGetValue("PublicKey", out var pub)) PublicKeyPem = pub;
@@ -55,11 +95,13 @@ public partial class LoginWindow : Window
                 }
             }
         }
-        catch { }
+        catch { } // Игнорируем ошибки чтения конфига
     }
 
-    // Сохранение текущей конфигурации (сессия + ключи)
-    private void SaveConfig(string login)
+    /// <summary>
+    /// Сохраняет текущие данные пользователя в config.json.
+    /// </summary>
+    private void SaveConfig(string email)
     {
         try
         {
@@ -69,8 +111,7 @@ public partial class LoginWindow : Window
             {
                 ["ClientId"] = AuthenticatedUserId.ToString(),
                 ["UserName"] = AuthenticatedUserName,
-                ["Login"] = login,
-                ["ServerAddress"] = ServerUrl,
+                ["Login"] = email,
                 ["Token"] = Token,
                 ["PublicKey"] = PublicKeyPem,
                 ["PrivateKey"] = PrivateKeyPem,
@@ -78,10 +119,12 @@ public partial class LoginWindow : Window
             };
             File.WriteAllText(Path.Combine(dir, "config.json"), JsonSerializer.Serialize(cfg));
         }
-        catch { }
+        catch { } // Игнорируем ошибки записи конфига
     }
 
-    // Переключение режима Вход / Регистрация
+    /// <summary>
+    /// Переключение режимов "Вход" / "Регистрация".
+    /// </summary>
     private void ModeRadio_Checked(object sender, RoutedEventArgs e)
     {
         if (NamePanel == null || SubmitButton == null) return;
@@ -91,16 +134,40 @@ public partial class LoginWindow : Window
         StatusTextBlock.Text = "";
     }
 
-    // Основная логика: подключение, отправка запроса, ожидание ответа
+    /// <summary>
+    /// Проверяет, что строка — корректный email (через MailAddress).
+    /// </summary>
+    private static bool IsValidEmail(string email)
+    {
+        try
+        {
+            var addr = new MailAddress(email);
+            return addr.Address == email.Trim();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Обрабатывает нажатие кнопки: валидация, подключение, отправка запроса, ожидание ответа.
+    /// </summary>
     private async void SubmitButton_Click(object sender, RoutedEventArgs e)
     {
-        string login = LoginBox.Text.Trim();
+        string email = LoginBox.Text.Trim();
         string password = PasswordBox.Password;
-        string serverUrl = ServerUrlBox.Text.Trim();
 
-        if (string.IsNullOrEmpty(login) || string.IsNullOrEmpty(password))
+        if (string.IsNullOrEmpty(email) || string.IsNullOrEmpty(password))
         {
-            StatusTextBlock.Text = "Заполните логин и пароль.";
+            StatusTextBlock.Text = "Заполните почту и пароль.";
+            return;
+        }
+
+        // Локальная проверка email до обращения к серверу
+        if (!IsValidEmail(email))
+        {
+            StatusTextBlock.Text = "Введите корректный Email.";
             return;
         }
 
@@ -109,20 +176,18 @@ public partial class LoginWindow : Window
 
         try
         {
-            // Ленивое подключение, если ещё не подключены
+            // Подключаемся, если ещё нет соединения
             if (!Network.IsConnected)
             {
-                await Network.ConnectAsync(serverUrl);
+                await Network.ConnectAsync(StaticServerUrl);
             }
-
-            ServerUrl = serverUrl;
 
             if (RegisterRadio.IsChecked == true)
             {
-                // ---- Регистрация ----
+                // === Режим регистрации ===
                 string name = NameBox.Text.Trim();
 
-                // Ключевая пара генерируется один раз и переиспользуется
+                // Генерируем RSA-ключи, если их ещё нет
                 if (string.IsNullOrEmpty(PublicKeyPem) || string.IsNullOrEmpty(PrivateKeyPem))
                 {
                     var keys = _crypto.GenerateRsaKeyPair();
@@ -136,15 +201,15 @@ public partial class LoginWindow : Window
                     Type = "RegisterAccount",
                     Payload = new RegisterAccountPayload
                     {
-                        Login = login,
+                        Email = email,
                         Password = password,
-                        UserName = string.IsNullOrEmpty(name) ? login : name,
+                        UserName = string.IsNullOrEmpty(name) ? email : name,
                         PublicKey = PublicKeyPem
                     }
                 });
 
-                // Таймаут 5 секунд на ответ
-                var completed = await Task.WhenAny(_registerTcs.Task, Task.Delay(5000));
+                // Ожидаем ответ с таймаутом 7 сек
+                var completed = await Task.WhenAny(_registerTcs.Task, Task.Delay(7000));
                 if (completed != _registerTcs.Task)
                 {
                     StatusTextBlock.Text = "Таймаут регистрации на сервере.";
@@ -155,36 +220,45 @@ public partial class LoginWindow : Window
                 var resp = await _registerTcs.Task;
                 if (resp.Status == "Ok")
                 {
+                    // Успешная регистрация
                     AuthenticatedUserId = resp.AssignedId;
-                    AuthenticatedUserName = string.IsNullOrEmpty(name) ? login : name;
+                    AuthenticatedUserName = string.IsNullOrEmpty(name) ? email : name;
                     Token = resp.Token;
-                    SaveConfig(login);
+                    SaveConfig(email);
+
+                    // Отписываемся перед закрытием, чтобы NetworkService не держал окно
+                    UnsubscribeNetworkHandlers();
                     DialogResult = true;
                     Close();
                 }
                 else
                 {
-                    StatusTextBlock.Text = resp.Status == "UserExists"
-                        ? "Пользователь с таким логином уже существует."
-                        : $"Ошибка регистрации: {resp.Status}";
+                    // Разные сообщения для разных кодов ошибок сервера
+                    StatusTextBlock.Text = resp.Status switch
+                    {
+                        "UserExists" => "Пользователь с такой почтой уже существует.",
+                        "InvalidEmail" => "Некорректный email.",
+                        _ => $"Ошибка регистрации: {resp.Status}"
+                    };
                     SubmitButton.IsEnabled = true;
                 }
             }
             else
             {
-                // ---- Вход ----
+                // === Режим входа ===
                 _loginTcs = new TaskCompletionSource<LoginResponsePayload>();
                 await Network.SendAsync(new
                 {
                     Type = "Login",
                     Payload = new LoginPayload
                     {
-                        Login = login,
+                        Email = email,
                         Password = password
                     }
                 });
 
-                var completed = await Task.WhenAny(_loginTcs.Task, Task.Delay(5000));
+                // Ожидаем ответ с таймаутом 7 сек
+                var completed = await Task.WhenAny(_loginTcs.Task, Task.Delay(7000));
                 if (completed != _loginTcs.Task)
                 {
                     StatusTextBlock.Text = "Таймаут авторизации.";
@@ -195,11 +269,12 @@ public partial class LoginWindow : Window
                 var resp = await _loginTcs.Task;
                 if (resp.Status == "Ok")
                 {
+                    // Успешный вход
                     AuthenticatedUserId = resp.UserId;
                     AuthenticatedUserName = resp.UserName;
                     Token = resp.Token;
 
-                    // Ключи создаются при первом входе, если ещё не сохранены
+                    // Генерируем ключи, если их ещё нет
                     if (string.IsNullOrEmpty(PublicKeyPem) || string.IsNullOrEmpty(PrivateKeyPem))
                     {
                         var keys = _crypto.GenerateRsaKeyPair();
@@ -207,14 +282,17 @@ public partial class LoginWindow : Window
                         PrivateKeyPem = keys.privateKey;
                     }
 
-                    SaveConfig(login);
+                    SaveConfig(email);
+
+                    // Отписываемся перед закрытием окна
+                    UnsubscribeNetworkHandlers();
                     DialogResult = true;
                     Close();
                 }
                 else
                 {
                     StatusTextBlock.Text = resp.Status == "InvalidCredentials"
-                        ? "Неверный логин или пароль."
+                        ? "Неверная почта или пароль."
                         : "Пользователь не найден.";
                     SubmitButton.IsEnabled = true;
                 }

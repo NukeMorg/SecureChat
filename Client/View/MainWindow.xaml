@@ -12,7 +12,6 @@
         <KeyBinding Command="{x:Static local:MainWindow.ExitCommand}" Gesture="Ctrl+Q"/>
         <KeyBinding Command="{x:Static local:MainWindow.ToggleThemeCommand}" Gesture="Ctrl+T"/>
         <KeyBinding Command="{x:Static local:MainWindow.ChangeNameCommand}" Gesture="Ctrl+N"/>
-        <KeyBinding Command="{x:Static local:MainWindow.ChangeServerAddressCommand}" Gesture="Ctrl+S"/>
     </Window.InputBindings>
 
     <Window.Resources>
@@ -50,11 +49,6 @@
                 <MenuItem Header="Выход" Command="{x:Static local:MainWindow.ExitCommand}" InputGestureText="Ctrl+Q"/>
             </MenuItem>
 
-            <!-- Сервер -->
-            <MenuItem Header="Сервер">
-                <MenuItem Header="Указать адрес сервера WebSocket..." Command="{x:Static local:MainWindow.ChangeServerAddressCommand}" InputGestureText="Ctrl+S"/>
-            </MenuItem>
-
             <!-- Вид -->
             <MenuItem Header="Вид">
                 <MenuItem Header="Сменить тему" Command="{x:Static local:MainWindow.ToggleThemeCommand}" InputGestureText="Ctrl+T"/>
@@ -81,33 +75,47 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Левая панель: контакты со статусом в сети / не в сети -->
+            <!-- Левая панель: индикатор, одно универсальное поле поиска/добавления и список -->
             <Border Grid.Column="0" Background="{DynamicResource SidebarBackground}" CornerRadius="8" Margin="8">
                 <Grid Margin="5">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
+                    <!-- Индикатор и профиль -->
                     <StackPanel Grid.Row="0" Margin="5">
                         <StackPanel Orientation="Horizontal">
                             <Ellipse x:Name="ConnectionIndicator" Width="10" Height="10" Fill="Gray" Margin="0,0,8,0" VerticalAlignment="Center"/>
                             <TextBlock x:Name="UserIdTextBlock" Text="ID: -" FontWeight="Bold" FontSize="14"/>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBox x:Name="RecipientIdTextBox" Width="100" Margin="5"
-                                     Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
-                                     BorderBrush="{DynamicResource ForegroundColor}"/>
-                            <Button Content="Новый диалог" Click="NewDialogButton_Click" 
-                                    Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
-                                    BorderThickness="0" Height="25" FontSize="11" Margin="5"/>
-                            <Button Content="Тема" Click="ToggleTheme_Click"
-                                    Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
-                                    BorderThickness="0" Height="25" FontSize="11" Margin="5,0,0,0"/>
-                        </StackPanel>
                     </StackPanel>
 
-                    <ListBox x:Name="ContactsListBox" Grid.Row="1"
+                    <!-- Единое поле поиска по имени и добавления диалога по ID + Enter -->
+                    <Grid Grid.Row="1" Margin="5,2,5,8">
+                        <TextBox x:Name="SearchAndAddTextBox" Height="28" Padding="6,4"
+                                 Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}"
+                                 BorderBrush="{DynamicResource StatusForeground}"
+                                 TextChanged="SearchAndAddTextBox_TextChanged"
+                                 KeyDown="SearchAndAddTextBox_KeyDown"/>
+                        <TextBlock Text="Поиск по имени или ID + Enter..." IsHitTestVisible="False" Margin="8,6,0,0"
+                                   Foreground="{DynamicResource StatusForeground}" FontSize="12">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Text, ElementName=SearchAndAddTextBox}" Value="">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+
+                    <!-- Список контактов -->
+                    <ListBox x:Name="ContactsListBox" Grid.Row="2"
                              Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
                              BorderThickness="0"
                              SelectionChanged="ContactsListBox_SelectionChanged">
@@ -119,7 +127,6 @@
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <!-- Индикатор онлайн: зеленый / серый -->
                                         <Ellipse Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center">
                                             <Ellipse.Style>
                                                 <Style TargetType="Ellipse">
@@ -132,7 +139,6 @@
                                                 </Style>
                                             </Ellipse.Style>
                                         </Ellipse>
-                                        <!-- Имя + ID и только статус в сети / не в сети -->
                                         <StackPanel Grid.Column="1">
                                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"/>
                                             <TextBlock Text="{Binding StatusText}" FontSize="11"
@@ -146,7 +152,7 @@
                 </Grid>
             </Border>
 
-            <!-- Правая панель: переписка E2EE -->
+            <!-- Правая панель: переписка -->
             <Grid Grid.Column="1" Margin="8">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
