@@ -1,17 +1,18 @@
 ﻿using System;
-using System.Linq;
 using System.Windows;
 using SecureChat.Client.Services;
 using SecureChat.Client.View;
+using AppSettings = SecureChat.Client.Properties.Settings;
 
 namespace SecureChat.Client;
 
 /// <summary>
-/// Точка входа WPF: применяет тему, открывает окно входа, при успехе — главное окно.
+/// Точка входа WPF: применяет сохранённую тему, пробует авто-вход по сохранённому токену,
+/// иначе показывает окно входа. Тема хранится в Properties.Settings (user.config).
 /// </summary>
 public partial class App : Application
 {
-    // Текущая тема оформления ("Dark" | "Light")
+    // Текущая тема оформления ("Dark" | "Light"). Источник истины — AppSettings.Default.Theme.
     public static string CurrentTheme { get; set; } = "Dark";
 
     // Единый сетевой сервис на всё время работы приложения (переживает смену окон)
@@ -24,15 +25,40 @@ public partial class App : Application
         // Приложение не должно завершаться при закрытии LoginWindow — только явно
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
-        ApplyTheme(CurrentTheme);
+        // 1) Читаем сохранённую тему из user.config (или дефолт "Dark")
+        CurrentTheme = LoadThemeFromSettings();
+        ApplyThemeInternal(CurrentTheme, saveToSettings: false);
 
-        // Окно входа использует общий экземпляр NetworkService
+        // 2) Авто-вход (если в config.json RememberMe="true")
+        var saved = LoginWindow.ReadAutoLoginConfig();
+        if (saved != null)
+        {
+            var session = LoginWindow.TryAutoLoginBlocking(Network, saved, timeoutMs: 5000);
+            if (session != null)
+            {
+                var mainWindow = new MainWindow(
+                    session.UserId,
+                    session.UserName,
+                    session.Token,
+                    LoginWindow.StaticServerUrl,
+                    session.PublicKey,
+                    session.PrivateKey,
+                    Network);
+
+                MainWindow = mainWindow;
+                ShutdownMode = ShutdownMode.OnMainWindowClose;
+                mainWindow.Show();
+                return;
+            }
+            // Не удалось — падаем в обычный сценарий с окном входа
+        }
+
+        // 3) Обычный вход
         var loginWindow = new LoginWindow(Network);
         bool? result = loginWindow.ShowDialog();
 
         if (result == true && loginWindow.AuthenticatedUserId > 0)
         {
-            // Успешный вход — открываем главное окно с данными сессии
             var mainWindow = new MainWindow(
                 loginWindow.AuthenticatedUserId,
                 loginWindow.AuthenticatedUserName,
@@ -40,31 +66,32 @@ public partial class App : Application
                 loginWindow.ServerUrl,
                 loginWindow.PublicKeyPem,
                 loginWindow.PrivateKeyPem,
-                Network
-            );
+                Network);
 
             MainWindow = mainWindow;
-            // Дальше приложение закрывается вместе с главным окном
             ShutdownMode = ShutdownMode.OnMainWindowClose;
             mainWindow.Show();
         }
         else
         {
-            // Вход отменён/не удался — рвём соединение и выходим
             Network.Disconnect();
             Shutdown();
         }
     }
 
     /// <summary>
-    /// Применяет тему: удаляет прежний словарь тем и подключает новый.
+    /// Применяет тему и СОХРАНЯЕТ её в user.config.
+    /// Вызывается из MainWindow при переключении темы.
     /// </summary>
-    public static void ApplyTheme(string theme)
-    {
-        CurrentTheme = theme;
-        var dicts = Current.Resources.MergedDictionaries;
+    public static void ApplyTheme(string theme) => ApplyThemeInternal(theme, saveToSettings: true);
 
-        // Удаляем все ранее подключённые словари тем (Theme.xaml)
+    private static void ApplyThemeInternal(string theme, bool saveToSettings)
+    {
+        if (theme != "Dark" && theme != "Light") theme = "Dark";
+        bool changed = CurrentTheme != theme;
+        CurrentTheme = theme;
+
+        var dicts = Current.Resources.MergedDictionaries;
         for (int i = dicts.Count - 1; i >= 0; i--)
         {
             var src = dicts[i].Source?.OriginalString ?? "";
@@ -72,13 +99,38 @@ public partial class App : Application
                 dicts.RemoveAt(i);
         }
 
-        // Подключаем выбранную тему
-        var themeDict = new ResourceDictionary();
-        if (theme == "Light")
-            themeDict.Source = new Uri("Themes/LightTheme.xaml", UriKind.Relative);
-        else
-            themeDict.Source = new Uri("Themes/DarkTheme.xaml", UriKind.Relative);
-
+        var themeDict = new ResourceDictionary
+        {
+            Source = theme == "Light"
+                ? new Uri("Themes/LightTheme.xaml", UriKind.Relative)
+                : new Uri("Themes/DarkTheme.xaml", UriKind.Relative)
+        };
         dicts.Add(themeDict);
+
+        if (saveToSettings && changed)
+        {
+            try
+            {
+                AppSettings.Default.Theme = theme;
+                AppSettings.Default.Save();
+            }
+            catch
+            {
+                // read-only профиль — тема применена, но не запомнится
+            }
+        }
+    }
+
+    private static string LoadThemeFromSettings()
+    {
+        try
+        {
+            string t = AppSettings.Default.Theme;
+            return (t == "Light" || t == "Dark") ? t : "Dark";
+        }
+        catch
+        {
+            return "Dark";
+        }
     }
 }

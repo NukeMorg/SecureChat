@@ -23,7 +23,6 @@ namespace SecureChat.Client;
 /// </summary>
 public partial class MainWindow : Window
 {
-    // Команды меню
     public static readonly RoutedUICommand ExitCommand = new(
         "Выход", nameof(ExitCommand), typeof(MainWindow));
 
@@ -33,18 +32,15 @@ public partial class MainWindow : Window
     public static readonly RoutedUICommand ChangeNameCommand = new(
         "Изменить имя", nameof(ChangeNameCommand), typeof(MainWindow));
 
-    // Контакты и кэш диалогов: contactId -> сообщения
     private readonly ObservableCollection<ContactItem> _contacts = new();
     private readonly Dictionary<int, ObservableCollection<DialogMessage>> _allDialogs = new();
     private ICollectionView _contactsView;
 
-    // Сервисы
     private NetworkService _network;
     private CryptoService _crypto = new();
     private DialogManager _dialogManager;
     private FileTransferManager _fileTransfer;
 
-    // Текущая сессия
     private int _clientId;
     private string _userName;
     private string _token;
@@ -52,13 +48,9 @@ public partial class MainWindow : Window
     private string _publicKeyPem;
     private string _privateKeyPem;
 
-    // Активный диалог и кэш публичных ключей собеседников
     private int _currentContactId = -1;
     private Dictionary<int, string> _contactPublicKeys = new();
 
-    /// <summary>
-    /// Конструктор для дизайнера WPF — без параметров сессии.
-    /// </summary>
     public MainWindow()
     {
         InitializeComponent();
@@ -75,9 +67,6 @@ public partial class MainWindow : Window
         InitCommon();
     }
 
-    /// <summary>
-    /// Основной конструктор: получает данные сессии из LoginWindow.
-    /// </summary>
     public MainWindow(int clientId, string userName, string token, string serverAddress, string publicKeyPem, string privateKeyPem, NetworkService network)
     {
         InitializeComponent();
@@ -95,7 +84,6 @@ public partial class MainWindow : Window
 
         InitCommon();
 
-        // Подписка на события сети
         _network.OnIncomingMessage += OnIncomingMessage;
         _network.OnDeliveryStatus += OnDeliveryStatus;
         _network.OnConnected += () => Dispatcher.Invoke(() => UpdateConnectionStatus(true));
@@ -107,7 +95,6 @@ public partial class MainWindow : Window
         _network.OnContactList += OnContactList;
         _network.OnAddContactResponse += OnAddContactResponse;
 
-        // Онлайн-статус контактов
         _network.OnUserOnline += userId =>
         {
             Dispatcher.Invoke(() =>
@@ -127,16 +114,12 @@ public partial class MainWindow : Window
 
         UpdateTitleAndStatus();
 
-        // Загружаем контакты после появления окна
         this.Loaded += async (s, e) =>
         {
             await _network.SendAsync(new { Type = "GetContacts" });
         };
     }
 
-    /// <summary>
-    /// Общая инициализация для обоих конструкторов: команды меню и привязка списка контактов.
-    /// </summary>
     private void InitCommon()
     {
         CommandBindings.Add(new CommandBinding(ExitCommand, (s, e) => Application.Current.Shutdown()));
@@ -147,9 +130,6 @@ public partial class MainWindow : Window
         ContactsListBox.ItemsSource = _contactsView;
     }
 
-    /// <summary>
-    /// Живая фильтрация списка контактов по имени или ID.
-    /// </summary>
     private void SearchAndAddTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         string query = SearchAndAddTextBox.Text.Trim();
@@ -173,9 +153,6 @@ public partial class MainWindow : Window
         _contactsView.Refresh();
     }
 
-    /// <summary>
-    /// Enter в поле поиска: числовой ID — открыть/добавить контакт; текст — открыть единственное совпадение.
-    /// </summary>
     private async void SearchAndAddTextBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter) return;
@@ -183,7 +160,6 @@ public partial class MainWindow : Window
         string input = SearchAndAddTextBox.Text.Trim();
         if (string.IsNullOrEmpty(input)) return;
 
-        // Если введён числовой ID
         if (int.TryParse(input, out int id) && id > 0)
         {
             if (id == _clientId)
@@ -192,7 +168,6 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // Контакт уже в списке — просто выбираем его
             var existingContact = _contacts.FirstOrDefault(c => c.Id == id);
             if (existingContact != null)
             {
@@ -202,7 +177,6 @@ public partial class MainWindow : Window
                 return;
             }
 
-            // Новый контакт: добавляем локально и запрашиваем сервер
             var newContact = new ContactItem { Id = id, RawName = $"User {id}", IsOnline = false };
             _contacts.Add(newContact);
             if (!_allDialogs.ContainsKey(id))
@@ -217,7 +191,6 @@ public partial class MainWindow : Window
         }
         else
         {
-            // Текстовый запрос: если отфильтровался ровно один — открываем его
             var matchingContacts = _contactsView.Cast<ContactItem>().ToList();
             if (matchingContacts.Count == 1)
             {
@@ -226,26 +199,17 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// Возвращает закэшированный публичный ключ контакта или null.
-    /// </summary>
     private string? GetContactPublicKey(int contactId)
     {
         _contactPublicKeys.TryGetValue(contactId, out var key);
         return key;
     }
 
-    /// <summary>
-    /// Кэширует публичный ключ контакта.
-    /// </summary>
     private void SetContactPublicKey(int contactId, string key)
     {
         _contactPublicKeys[contactId] = key;
     }
 
-    /// <summary>
-    /// Обновляет заголовок, подпись пользователя и индикатор соединения.
-    /// </summary>
     private void UpdateTitleAndStatus()
     {
         Title = $"SecureChat Enterprise - {_userName} (ID: {_clientId})";
@@ -253,18 +217,12 @@ public partial class MainWindow : Window
         ConnectionIndicator.Fill = _network.IsConnected ? new SolidColorBrush(Colors.LimeGreen) : new SolidColorBrush(Colors.Gray);
     }
 
-    /// <summary>
-    /// Меняет индикатор соединения и подпись (онлайн/офлайн).
-    /// </summary>
     private void UpdateConnectionStatus(bool connected)
     {
         ConnectionIndicator.Fill = connected ? new SolidColorBrush(Colors.LimeGreen) : new SolidColorBrush(Colors.Gray);
         UserIdTextBlock.Text = connected ? $"{_userName} (ID: {_clientId})" : $"{_userName} (ID: {_clientId}) (отключено)";
     }
 
-    /// <summary>
-    /// Ручное переподключение: соединение + Hello + обновление контактов.
-    /// </summary>
     private async void Reconnect_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -282,51 +240,79 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Смена аккаунта: разрываем соединение и открываем окно входа.
+    /// Смена аккаунта: отключаем сеть, сбрасываем авто-вход и сохранённый email,
+    /// скрываем текущее окно, показываем окно входа.
+    /// Успех → открывается новое главное окно, старое закрывается.
+    /// Отмена → приложение завершается (смена учётной записи = логаут).
     /// </summary>
     private void SwitchAccount_Click(object sender, RoutedEventArgs e)
     {
+        // 1. Отключаем сеть от текущей сессии
         _network.Disconnect();
-        var loginWindow = new LoginWindow();
-        bool? res = loginWindow.ShowDialog();
-        if (res == true && loginWindow.AuthenticatedUserId > 0)
+
+        // 2. Сбрасываем «Запомнить меня» и сохранённый email в config.json
+        LoginWindow.ClearAutoLoginState();
+
+        // 3. На время логина отключаем автоматическое завершение приложения —
+        //    иначе Hide()/Close() главного окна сразу убьёт процесс
+        var app = (App)Application.Current;
+        app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+        // 4. Прячем главное окно — оно «пропадает» до конца логина
+        Hide();
+
+        try
         {
-            // Новый MainWindow с данными из LoginWindow
-            var nextMain = new MainWindow(
-                loginWindow.AuthenticatedUserId,
-                loginWindow.AuthenticatedUserName,
-                loginWindow.Token,
-                loginWindow.ServerUrl,
-                loginWindow.PublicKeyPem,
-                loginWindow.PrivateKeyPem,
-                loginWindow.Network
-            );
-            nextMain.Show();
-            Close();
+            var loginWindow = new LoginWindow();
+            bool? res = loginWindow.ShowDialog();
+
+            if (res == true && loginWindow.AuthenticatedUserId > 0)
+            {
+                // 5. Успешный вход — открываем новое главное окно
+                var nextMain = new MainWindow(
+                    loginWindow.AuthenticatedUserId,
+                    loginWindow.AuthenticatedUserName,
+                    loginWindow.Token,
+                    loginWindow.ServerUrl,
+                    loginWindow.PublicKeyPem,
+                    loginWindow.PrivateKeyPem,
+                    loginWindow.Network);
+
+                Application.Current.MainWindow = nextMain;
+                nextMain.Show();
+
+                // 6. Закрываем старое (уже скрытое) окно
+                Close();
+
+                // 7. Возвращаем обычное поведение — приложение завершится вместе с новым окном
+                app.ShutdownMode = ShutdownMode.OnMainWindowClose;
+            }
+            else
+            {
+                // 8. Отмена/ошибка входа — выходим из приложения
+                app.Shutdown();
+            }
+        }
+        catch
+        {
+            // На случай непредвиденной ошибки — не оставляем приложение без окон
+            app.Shutdown();
+            throw;
         }
     }
 
-    /// <summary>
-    /// Копирует публичный ключ пользователя в буфер обмена.
-    /// </summary>
     private void ShowMyPublicKey_Click(object sender, RoutedEventArgs e)
     {
         Clipboard.SetText(_publicKeyPem);
         MessageBox.Show("Публичный ключ скопирован в буфер обмена.", "Ключ", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    /// <summary>
-    /// Окно "О программе".
-    /// </summary>
     private void About_Click(object sender, RoutedEventArgs e)
     {
         MessageBox.Show("SecureChat Enterprise v2.0\n\nКорпоративный мессенджер на WebSocket со сквозным шифрованием (RSA-2048 + AES-256-GCM).",
             "О программе", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    /// <summary>
-    /// Открывает окно справки.
-    /// </summary>
     private void HelpGuide_Click(object sender, RoutedEventArgs e)
     {
         var help = new HelpWindow();
@@ -334,9 +320,6 @@ public partial class MainWindow : Window
         help.Show();
     }
 
-    /// <summary>
-    /// Сервер сообщил, что кто-то сменил имя — обновляем соответствующий контакт.
-    /// </summary>
     private void OnUserProfileUpdated(UserProfileUpdatedPayload update)
     {
         Dispatcher.Invoke(() =>
@@ -346,9 +329,6 @@ public partial class MainWindow : Window
         });
     }
 
-    /// <summary>
-    /// Ответ на GetUserInfo — обновляем имя контакта.
-    /// </summary>
     private void OnUserInfoResponse(UserInfoResponsePayload info)
     {
         Dispatcher.Invoke(() =>
@@ -361,9 +341,6 @@ public partial class MainWindow : Window
         });
     }
 
-    /// <summary>
-    /// Пришла история сообщений: расшифровываем и добавляем в кэш диалога.
-    /// </summary>
     private void OnHistoryResponse(HistoryResponsePayload history)
     {
         Dispatcher.Invoke(() =>
@@ -375,10 +352,8 @@ public partial class MainWindow : Window
             var existingIds = new HashSet<string>(_allDialogs[contactId].Select(m => m.Id));
             foreach (var hm in history.Messages)
             {
-                // Дубликаты пропускаем
                 if (existingIds.Contains(hm.MessageId)) continue;
 
-                // Восстанавливаем сессионный ключ из зашифрованного (себе — EncryptedKeySelf, входящее — EncryptedKey)
                 byte[]? sessionKey = null;
                 if (hm.SenderId == _clientId)
                 {
@@ -410,7 +385,6 @@ public partial class MainWindow : Window
 
                 if (hm.ContentType == "Text" && hm.Ciphertext != null && hm.Nonce != null && hm.Tag != null)
                 {
-                    // Расшифровываем текст
                     byte[] ct = Convert.FromBase64String(hm.Ciphertext);
                     byte[] n = Convert.FromBase64String(hm.Nonce);
                     byte[] t = Convert.FromBase64String(hm.Tag);
@@ -429,7 +403,6 @@ public partial class MainWindow : Window
                 }
                 else if (hm.ContentType == "File")
                 {
-                    // Файл в истории — только метаданные
                     _allDialogs[contactId].Add(new DialogMessage
                     {
                         Id = hm.MessageId,
@@ -449,9 +422,6 @@ public partial class MainWindow : Window
         });
     }
 
-    /// <summary>
-    /// Пришёл список контактов — перестраиваем список.
-    /// </summary>
     private void OnContactList(ContactListPayload list)
     {
         Dispatcher.Invoke(() =>
@@ -463,15 +433,11 @@ public partial class MainWindow : Window
                     _allDialogs[user.Id] = new ObservableCollection<DialogMessage>();
                 _contacts.Add(new ContactItem { Id = user.Id, RawName = user.Name, IsOnline = user.IsOnline });
             }
-            // Автоматически открываем первый контакт
             if (_contacts.Count > 0 && _currentContactId == -1)
                 ContactsListBox.SelectedIndex = 0;
         });
     }
 
-    /// <summary>
-    /// Обновляет галочки статуса (Sent / Delivered / UserOffline).
-    /// </summary>
     private void OnDeliveryStatus(DeliveryStatusPayload status)
     {
         Dispatcher.Invoke(() =>
@@ -491,14 +457,10 @@ public partial class MainWindow : Window
         });
     }
 
-    /// <summary>
-    /// Входящее сообщение: расшифровываем (при необходимости — извлекаем ключ), добавляем в диалог, отправляем Ack.
-    /// </summary>
     private void OnIncomingMessage(IncomingMessagePayload msg)
     {
         Dispatcher.Invoke(() =>
         {
-            // Если пришёл EncryptedKey — расшифровываем сессионный ключ своим приватным ключом
             byte[]? sessionKey = _dialogManager.GetSessionKey(msg.SenderId);
             if (msg.EncryptedKey != null)
             {
@@ -511,7 +473,6 @@ public partial class MainWindow : Window
 
             if (msg.ContentType == "Text" && msg.EncryptedData != null)
             {
-                // Расшифровываем текст
                 byte[] ct = Convert.FromBase64String(msg.EncryptedData.Ciphertext);
                 byte[] n = Convert.FromBase64String(msg.EncryptedData.Nonce);
                 byte[] t = Convert.FromBase64String(msg.EncryptedData.Tag);
@@ -531,7 +492,6 @@ public partial class MainWindow : Window
             }
             else if (msg.ContentType == "File")
             {
-                // Файл принимается FileTransferManager, по завершении — добавляем в диалог
                 _fileTransfer.HandleIncomingFile(msg, sessionKey, path =>
                 {
                     Dispatcher.Invoke(() => AddMessage(msg.SenderId, new DialogMessage
@@ -551,9 +511,6 @@ public partial class MainWindow : Window
         });
     }
 
-    /// <summary>
-    /// Сервер не нашёл добавляемого контакта — убираем его из списка.
-    /// </summary>
     private void OnAddContactResponse(AddContactResponsePayload response)
     {
         Dispatcher.Invoke(() =>
@@ -578,9 +535,6 @@ public partial class MainWindow : Window
         });
     }
 
-    /// <summary>
-    /// Добавляет сообщение в диалог (создаёт диалог/контакт при необходимости).
-    /// </summary>
     private void AddMessage(int contactId, DialogMessage msg)
     {
         if (!_allDialogs.ContainsKey(contactId))
@@ -596,9 +550,6 @@ public partial class MainWindow : Window
             MessagesListBox.ItemsSource = _allDialogs[contactId];
     }
 
-    /// <summary>
-    /// Переключение активного контакта; при пустом диалоге запрашиваем историю.
-    /// </summary>
     private async void ContactsListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (ContactsListBox.SelectedItem is ContactItem contact)
@@ -615,9 +566,6 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// Отправка текстового сообщения: получаем публичный ключ, шифруем ключ и текст, отправляем.
-    /// </summary>
     private async void SendButton_Click(object sender, RoutedEventArgs e)
     {
         if (_currentContactId <= 0) { MessageBox.Show("Выберите получателя", "Информация", MessageBoxButton.OK, MessageBoxImage.Information); return; }
@@ -626,7 +574,6 @@ public partial class MainWindow : Window
 
         try
         {
-            // Публичный ключ собеседника: из кэша или запрос к серверу
             string? pubKey = GetContactPublicKey(_currentContactId);
             if (pubKey == null)
             {
@@ -645,12 +592,10 @@ public partial class MainWindow : Window
                 SetContactPublicKey(_currentContactId, pubKey);
             }
 
-            // Сессионный AES-ключ шифруем дважды: для получателя и для себя
             byte[] sessionKey = _dialogManager.GetOrCreateSessionKey(_currentContactId);
             byte[] encKey = _crypto.RsaEncrypt(pubKey, sessionKey);
             byte[] encKeySelf = _crypto.RsaEncrypt(_publicKeyPem, sessionKey);
 
-            // Шифруем текст AES-GCM
             byte[] plain = Encoding.UTF8.GetBytes(text);
             var (ct, nonce, tag) = _crypto.AesGcmEncrypt(sessionKey, plain);
             var msgId = Guid.NewGuid().ToString();
@@ -674,7 +619,6 @@ public partial class MainWindow : Window
                 }
             });
 
-            // Локально показываем сразу
             AddMessage(_currentContactId, new DialogMessage
             {
                 Id = msgId,
@@ -695,15 +639,11 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// Отправка файла: получаем публичный ключ, шифруем сессионный ключ и передаём FileTransferManager.
-    /// </summary>
     private async void AttachFileButton_Click(object sender, RoutedEventArgs e)
     {
         if (_currentContactId <= 0) { MessageBox.Show("Выберите получателя", "Информация", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         try
         {
-            // Публичный ключ собеседника
             string? pubKey = GetContactPublicKey(_currentContactId);
             if (pubKey == null)
             {
@@ -756,9 +696,6 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// Ctrl+Enter в поле ввода — отправка сообщения.
-    /// </summary>
     private void MessageTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.Control)
@@ -768,18 +705,12 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// Переключение темы Dark ↔ Light.
-    /// </summary>
     private void ToggleTheme_Click(object sender, RoutedEventArgs e)
     {
         string newTheme = App.CurrentTheme == "Dark" ? "Light" : "Dark";
         App.ApplyTheme(newTheme);
     }
 
-    /// <summary>
-    /// Смена отображаемого имени пользователя.
-    /// </summary>
     private async void ChangeName_Click(object sender, RoutedEventArgs e)
     {
         string? newName = ShowInputDialog("Имя пользователя", _userName);
@@ -791,17 +722,11 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// При закрытии окна корректно отключаемся от сервера.
-    /// </summary>
     private void Window_Closing(object sender, CancelEventArgs e)
     {
         _network.Disconnect();
     }
 
-    /// <summary>
-    /// Простой модальный диалог ввода строки (без XAML).
-    /// </summary>
     private string? ShowInputDialog(string title, string defaultText)
     {
         var dialog = new Window

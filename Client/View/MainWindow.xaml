@@ -43,8 +43,6 @@
         <Menu Grid.Row="0" FontSize="13" Background="{DynamicResource SidebarBackground}" Foreground="{DynamicResource ForegroundColor}">
             <!-- Файл -->
             <MenuItem Header="Файл">
-                <MenuItem Header="Переподключиться" Click="Reconnect_Click"/>
-                <Separator/>
                 <MenuItem Header="Сменить учетную запись" Click="SwitchAccount_Click"/>
                 <MenuItem Header="Выход" Command="{x:Static local:MainWindow.ExitCommand}" InputGestureText="Ctrl+Q"/>
             </MenuItem>
