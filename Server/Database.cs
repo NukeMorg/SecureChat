@@ -75,7 +75,13 @@ public class Database
                 PRIMARY KEY (UserId, ContactId),
                 FOREIGN KEY (UserId) REFERENCES Clients(Id),
                 FOREIGN KEY (ContactId) REFERENCES Clients(Id)
-            );";
+            );
+            CREATE TABLE IF NOT EXISTS EmailRateLimits (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Email TEXT NOT NULL,
+                LastSentAt TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_email_rate ON EmailRateLimits(Email, LastSentAt);";
         cmd.ExecuteNonQuery();
     }
 
@@ -348,11 +354,23 @@ public class Database
         conn.Open();
         var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-            INSERT OR REPLACE INTO Messages
+            INSERT INTO Messages
             (MessageId, SenderId, ReceiverId, EncryptedKey, Nonce, Ciphertext, Tag,
              ContentType, FileName, FileSize, FileTransferId, Timestamp, Status, EncryptedKeySelf)
             VALUES (@msgId, @sender, @receiver, @encKey, @nonce, @ct, @tag,
-                    @ctype, @fname, @fsize, @ftransfer, @time, @status, @encKeySelf)";
+                    @ctype, @fname, @fsize, @ftransfer, @time, @status, @encKeySelf)
+            ON CONFLICT(MessageId) DO UPDATE SET
+                EncryptedKey = excluded.EncryptedKey,
+                EncryptedKeySelf = excluded.EncryptedKeySelf,
+                Nonce = excluded.Nonce,
+                Ciphertext = excluded.Ciphertext,
+                Tag = excluded.Tag,
+                ContentType = excluded.ContentType,
+                FileName = excluded.FileName,
+                FileSize = excluded.FileSize,
+                FileTransferId = excluded.FileTransferId,
+                Timestamp = excluded.Timestamp,
+                Status = excluded.Status";
         cmd.Parameters.AddWithValue("@msgId", messageId);
         cmd.Parameters.AddWithValue("@sender", senderId);
         cmd.Parameters.AddWithValue("@receiver", receiverId);
@@ -477,5 +495,75 @@ public class Database
         using var reader = cmd.ExecuteReader();
         while (reader.Read()) ids.Add(reader.GetInt32(0));
         return ids;
+    }
+
+    /// <summary>
+    /// Атомарно резервирует попытку отправки кода. Возвращает false, если лимит исчерпан.
+    /// Запись НЕ откатывается при неудачной SMTP-отправке — это защита от abuse.
+    /// </summary>
+    public bool TryReserveEmailSend(string email, TimeSpan window, int maxAttempts)
+    {
+        string normEmail = email.Trim().ToLowerInvariant();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+
+        using (var cleanCmd = conn.CreateCommand())
+        {
+            cleanCmd.CommandText = "DELETE FROM EmailRateLimits WHERE LastSentAt < @cutoff";
+            cleanCmd.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.Subtract(window).ToString("o"));
+            cleanCmd.ExecuteNonQuery();
+        }
+
+        using var insertCmd = conn.CreateCommand();
+        insertCmd.CommandText = @"
+        INSERT INTO EmailRateLimits (Email, LastSentAt)
+        SELECT @email, @time
+        WHERE (SELECT COUNT(*) FROM EmailRateLimits WHERE Email = @email) < @max";
+        insertCmd.Parameters.AddWithValue("@email", normEmail);
+        insertCmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        insertCmd.Parameters.AddWithValue("@max", maxAttempts);
+        return insertCmd.ExecuteNonQuery() > 0;
+    }
+
+    /// <summary>
+    /// Недоставленные сообщения (Status='Sent'), адресованные пользователю.
+    /// Используется для догоняющей доставки после реконнекта.
+    /// </summary>
+    public List<HistoryMessage> GetPendingMessages(int receiverId)
+    {
+        var list = new List<HistoryMessage>();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+        SELECT MessageId, SenderId, ReceiverId, EncryptedKey, EncryptedKeySelf,
+               Nonce, Ciphertext, Tag, ContentType, FileName, FileSize,
+               FileTransferId, Timestamp, Status
+        FROM Messages
+        WHERE ReceiverId = @uid AND Status = 'Sent'
+        ORDER BY Timestamp ASC";
+        cmd.Parameters.AddWithValue("@uid", receiverId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new HistoryMessage
+            {
+                MessageId = reader.GetString(0),
+                SenderId = reader.GetInt32(1),
+                ReceiverId = reader.GetInt32(2),
+                EncryptedKey = reader.IsDBNull(3) ? null : reader.GetString(3),
+                EncryptedKeySelf = reader.IsDBNull(4) ? null : reader.GetString(4),
+                Nonce = reader.IsDBNull(5) ? null : reader.GetString(5),
+                Ciphertext = reader.IsDBNull(6) ? null : reader.GetString(6),
+                Tag = reader.IsDBNull(7) ? null : reader.GetString(7),
+                ContentType = reader.GetString(8),
+                FileName = reader.IsDBNull(9) ? null : reader.GetString(9),
+                FileSize = reader.GetInt64(10),
+                FileTransferId = reader.IsDBNull(11) ? null : reader.GetString(11),
+                Timestamp = reader.GetString(12),
+                Status = reader.GetString(13)
+            });
+        }
+        return list;
     }
 }

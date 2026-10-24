@@ -210,6 +210,39 @@ public partial class MainWindow : Window
         _contactPublicKeys[contactId] = key;
     }
 
+    /// <summary>
+    /// Гарантированно возвращает публичный ключ контакта: берёт из кэша
+    /// или запрашивает у сервера с таймаутом. null — не удалось получить.
+    /// </summary>
+    private async Task<string?> EnsurePublicKeyAsync(int contactId)
+    {
+        var cached = GetContactPublicKey(contactId);
+        if (!string.IsNullOrEmpty(cached)) return cached;
+
+        var tcs = new TaskCompletionSource<string>();
+        void handler(PublicKeyResponsePayload p)
+        {
+            if (p.TargetId == contactId && p.Status == "Ok")
+                tcs.TrySetResult(p.PublicKey);
+        }
+        _network.OnPublicKeyResponse += handler;
+        try
+        {
+            await _network.SendAsync(new { Type = "GetPublicKey", Payload = new GetPublicKeyPayload { TargetId = contactId } });
+
+            var completed = await Task.WhenAny(tcs.Task, Task.Delay(5000));
+            if (completed != tcs.Task) return null;
+
+            var key = await tcs.Task;
+            SetContactPublicKey(contactId, key);
+            return key;
+        }
+        finally
+        {
+            _network.OnPublicKeyResponse -= handler;
+        }
+    }
+
     private void UpdateTitleAndStatus()
     {
         Title = $"SecureChat Enterprise - {_userName} (ID: {_clientId})";
@@ -415,6 +448,7 @@ public partial class MainWindow : Window
                         Timestamp = DateTime.Parse(hm.Timestamp)
                     });
                 }
+                existingIds.Add(hm.MessageId);
             }
 
             if (_currentContactId == contactId)
@@ -457,6 +491,10 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>
+    /// Приём входящего сообщения. Для файлов расшифровка и запись выполняются в фоне,
+    /// а Ack «Delivered» отправляется только после успешного сохранения.
+    /// </summary>
     private void OnIncomingMessage(IncomingMessagePayload msg)
     {
         Dispatcher.Invoke(() =>
@@ -477,6 +515,7 @@ public partial class MainWindow : Window
                 byte[] n = Convert.FromBase64String(msg.EncryptedData.Nonce);
                 byte[] t = Convert.FromBase64String(msg.EncryptedData.Tag);
                 byte[] plain = _crypto.AesGcmDecrypt(sessionKey, n, ct, t);
+
                 AddMessage(msg.SenderId, new DialogMessage
                 {
                     Id = msg.MessageId,
@@ -488,25 +527,55 @@ public partial class MainWindow : Window
                     IsOutgoing = false,
                     Timestamp = DateTime.Now
                 });
+
                 _ = _network.SendAsync(new { Type = "Ack", Payload = new AckPayload { MessageId = msg.MessageId, Status = "Delivered" } });
             }
             else if (msg.ContentType == "File")
             {
-                _fileTransfer.HandleIncomingFile(msg, sessionKey, path =>
+                // Захватываем переменные, чтобы не зависеть от времени жизни msg
+                var senderId = msg.SenderId;
+                var messageId = msg.MessageId;
+                var fileMsg = msg;
+                var key = sessionKey;
+
+                // Расшифровка и запись файла могут занимать секунды для больших файлов —
+                // выносим в фон, чтобы не блокировать UI-поток.
+                _ = Task.Run(() =>
                 {
-                    Dispatcher.Invoke(() => AddMessage(msg.SenderId, new DialogMessage
+                    try
                     {
-                        Id = msg.MessageId,
-                        SenderId = msg.SenderId,
-                        ReceiverId = _clientId,
-                        FilePath = path,
-                        ContentType = "File",
-                        Status = "✓✓",
-                        IsOutgoing = false,
-                        Timestamp = DateTime.Now
-                    }));
+                        _fileTransfer.HandleIncomingFile(fileMsg, key, path =>
+                        {
+                            Dispatcher.Invoke(() =>
+                            {
+                                AddMessage(senderId, new DialogMessage
+                                {
+                                    Id = messageId,
+                                    SenderId = senderId,
+                                    ReceiverId = _clientId,
+                                    FilePath = path,
+                                    ContentType = "File",
+                                    Status = "✓✓",
+                                    IsOutgoing = false,
+                                    Timestamp = DateTime.Now
+                                });
+
+                                // Ack отправляем только когда файл реально сохранён
+                                _ = _network.SendAsync(new
+                                {
+                                    Type = "Ack",
+                                    Payload = new AckPayload { MessageId = messageId, Status = "Delivered" }
+                                });
+                            });
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        Dispatcher.Invoke(() => MessageBox.Show(
+                            $"Ошибка приёма файла: {ex.Message}",
+                            "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error));
+                    }
                 });
-                _ = _network.SendAsync(new { Type = "Ack", Payload = new AckPayload { MessageId = msg.MessageId, Status = "Delivered" } });
             }
         });
     }
@@ -535,6 +604,10 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>
+    /// Добавляет сообщение в локальную модель. Дедуплицирует по MessageId,
+    /// чтобы повторная доставка (pending push после реконнекта) не создавала дублей.
+    /// </summary>
     private void AddMessage(int contactId, DialogMessage msg)
     {
         if (!_allDialogs.ContainsKey(contactId))
@@ -545,6 +618,11 @@ public partial class MainWindow : Window
                 _contacts.Add(new ContactItem { Id = contactId, RawName = $"User {contactId}", IsOnline = true });
             }
         }
+
+        // Защита от дублей: одно и то же сообщение может прийти
+        // и через обычный IncomingMessage, и через PushPendingMessages.
+        if (_allDialogs[contactId].Any(m => m.Id == msg.Id)) return;
+
         _allDialogs[contactId].Add(msg);
         if (_currentContactId == contactId)
             MessagesListBox.ItemsSource = _allDialogs[contactId];
@@ -574,22 +652,11 @@ public partial class MainWindow : Window
 
         try
         {
-            string? pubKey = GetContactPublicKey(_currentContactId);
+            string? pubKey = await EnsurePublicKeyAsync(_currentContactId);
             if (pubKey == null)
             {
-                var tcs = new TaskCompletionSource<string>();
-                void handler(PublicKeyResponsePayload p) { if (p.TargetId == _currentContactId && p.Status == "Ok") tcs.TrySetResult(p.PublicKey); }
-                _network.OnPublicKeyResponse += handler;
-                await _network.SendAsync(new { Type = "GetPublicKey", Payload = new GetPublicKeyPayload { TargetId = _currentContactId } });
-                var completed = await Task.WhenAny(tcs.Task, Task.Delay(5000));
-                _network.OnPublicKeyResponse -= handler;
-                if (completed != tcs.Task)
-                {
-                    MessageBox.Show("Не удалось получить открытый ключ собеседника (таймаут).", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
-                }
-                pubKey = await tcs.Task;
-                SetContactPublicKey(_currentContactId, pubKey);
+                MessageBox.Show("Не удалось получить открытый ключ собеседника.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
             }
 
             byte[] sessionKey = _dialogManager.GetOrCreateSessionKey(_currentContactId);
@@ -600,6 +667,21 @@ public partial class MainWindow : Window
             var (ct, nonce, tag) = _crypto.AesGcmEncrypt(sessionKey, plain);
             var msgId = Guid.NewGuid().ToString();
 
+            // 1. Сначала локально — чтобы OnDeliveryStatus гарантированно нашёл сообщение
+            //    (иначе race: сервер может ответить DeliveryStatus раньше, чем модель создастся)
+            AddMessage(_currentContactId, new DialogMessage
+            {
+                Id = msgId,
+                SenderId = _clientId,
+                ReceiverId = _currentContactId,
+                Text = text,
+                ContentType = "Text",
+                Status = "Отправка...",
+                IsOutgoing = true,
+                Timestamp = DateTime.Now
+            });
+
+            // 2. Затем на сервер
             await _network.SendAsync(new
             {
                 Type = "SendMessage",
@@ -619,18 +701,6 @@ public partial class MainWindow : Window
                 }
             });
 
-            AddMessage(_currentContactId, new DialogMessage
-            {
-                Id = msgId,
-                SenderId = _clientId,
-                ReceiverId = _currentContactId,
-                Text = text,
-                ContentType = "Text",
-                Status = "Отправка...",
-                IsOutgoing = true,
-                Timestamp = DateTime.Now
-            });
-
             MessageTextBox.Clear();
         }
         catch (Exception ex)
@@ -644,22 +714,11 @@ public partial class MainWindow : Window
         if (_currentContactId <= 0) { MessageBox.Show("Выберите получателя", "Информация", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         try
         {
-            string? pubKey = GetContactPublicKey(_currentContactId);
+            string? pubKey = await EnsurePublicKeyAsync(_currentContactId);
             if (pubKey == null)
             {
-                var tcs = new TaskCompletionSource<string>();
-                void handler(PublicKeyResponsePayload p) { if (p.TargetId == _currentContactId && p.Status == "Ok") tcs.TrySetResult(p.PublicKey); }
-                _network.OnPublicKeyResponse += handler;
-                await _network.SendAsync(new { Type = "GetPublicKey", Payload = new GetPublicKeyPayload { TargetId = _currentContactId } });
-                var completed = await Task.WhenAny(tcs.Task, Task.Delay(5000));
-                _network.OnPublicKeyResponse -= handler;
-                if (completed != tcs.Task)
-                {
-                    MessageBox.Show("Таймаут получения открытого ключа.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
-                }
-                pubKey = await tcs.Task;
-                SetContactPublicKey(_currentContactId, pubKey);
+                MessageBox.Show("Таймаут получения открытого ключа.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
             }
 
             var dlg = new Microsoft.Win32.OpenFileDialog();
@@ -669,7 +728,9 @@ public partial class MainWindow : Window
                 byte[] encKey = _crypto.RsaEncrypt(pubKey, sessionKey);
                 byte[] encKeySelf = _crypto.RsaEncrypt(_publicKeyPem, sessionKey);
 
-                await _fileTransfer.SendFileAsync(
+                // SendFileAsync возвращает MessageId, который реально ушёл на сервер —
+                // используем его же в локальной модели, иначе DeliveryStatus не найдёт сообщение.
+                string msgId = await _fileTransfer.SendFileAsync(
                     _currentContactId,
                     dlg.FileName,
                     sessionKey,
@@ -679,7 +740,7 @@ public partial class MainWindow : Window
 
                 AddMessage(_currentContactId, new DialogMessage
                 {
-                    Id = Guid.NewGuid().ToString(),
+                    Id = msgId,
                     SenderId = _clientId,
                     ReceiverId = _currentContactId,
                     FilePath = Path.GetFileName(dlg.FileName),

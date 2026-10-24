@@ -18,7 +18,7 @@ public class FileTransferManager
     }
 
     // Читает файл, шифрует сессионным ключом и отправляет одним сообщением
-    public async Task SendFileAsync(int receiverId, string filePath, byte[] sessionKey, string? encKeyBase64, string? encKeySelfBase64)
+    public async Task<string> SendFileAsync(int receiverId, string filePath, byte[] sessionKey, string? encKeyBase64, string? encKeySelfBase64)
     {
         byte[] fileData = File.ReadAllBytes(filePath);
         var (ciphertext, nonce, tag) = _crypto.AesGcmEncrypt(sessionKey, fileData);
@@ -46,6 +46,7 @@ public class FileTransferManager
                 FileTransferId = transferId
             }
         });
+        return msgId;
     }
 
     // Расшифровывает входящий файл и сохраняет в папку Downloads

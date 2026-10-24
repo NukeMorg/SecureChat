@@ -311,12 +311,23 @@ public partial class LoginWindow : Window
 
                 if (string.IsNullOrEmpty(PublicKeyPem) || string.IsNullOrEmpty(PrivateKeyPem))
                 {
+                    MessageBox.Show(
+                        "На этом устройстве не найдены ключи шифрования.\n\n" +
+                        "Будет создана новая пара ключей. Это означает, что вы сможете " +
+                        "расшифровывать НОВЫЕ сообщения, но НЕ сможете прочитать историю " +
+                        "переписки, сохранённую на сервере (она зашифрована под ваш старый ключ).\n\n" +
+                        "Чтобы восстановить доступ к старой истории — войдите с того устройства, " +
+                        "где ранее выполнялся вход, или восстановите файл config.json.",
+                        "Внимание: история недоступна",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+
                     var keys = _crypto.GenerateRsaKeyPair();
                     PublicKeyPem = keys.publicKey;
                     PrivateKeyPem = keys.privateKey;
                 }
 
-                SaveConfig(email, isRegistration: false);
+                    SaveConfig(email, isRegistration: false);
                 UnsubscribeNetworkHandlers();
                 DialogResult = true;
                 Close();

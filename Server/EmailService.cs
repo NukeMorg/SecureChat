@@ -18,13 +18,14 @@ public class EmailService
     private readonly int _smtpPort = 587;
     private readonly string _senderEmail;     // Почта отправителя
     private readonly string _senderPassword;  // Пароль приложения (App Password)
-    private readonly bool _useRealSmtp = true;    // true — реальная отправка; false — только лог в консоль
+    private readonly bool _useRealSmtp;
 
     // Конструктор для получения настроек из DI-контейнера
     public EmailService(IConfiguration configuration)
     {
         _senderEmail = configuration["Smtp:SenderEmail"]!;
         _senderPassword = configuration["Smtp:SenderPassword"]!;
+        _useRealSmtp = bool.TryParse(configuration["Smtp:UseRealSmtp"], out var b) ? b : true;
     }
 
     /// <summary>

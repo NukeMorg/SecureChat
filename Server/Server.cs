@@ -60,7 +60,9 @@ class Server
         catch (Exception ex)
         {
             // Фолбэк на localhost, если нет прав на привязку к *
-            Console.WriteLine($"Предупреждение: {ex.Message}. Запуск на ws://localhost:9000/");
+            Console.WriteLine($"Предупреждение: {ex.Message}. Запуск на ws://localhost:9000/. " +
+                              "В этом режиме сервер доступен ТОЛЬКО с localhost — для сетевого доступа " +
+                              "запустите от администратора или зарезервируйте URL через netsh.");
             listener = new HttpListener();
             listener.Prefixes.Add("http://localhost:9000/");
             listener.Start();
@@ -212,6 +214,7 @@ class Server
 
     /// <summary>
     /// Генерация и отправка кода подтверждения на email.
+    /// Rate-limit: не более 3 запросов на email за 15 минут.
     /// </summary>
     static async Task ProcessSendEmailCode(BaseMessage msg, WebSocket ws)
     {
@@ -219,6 +222,14 @@ class Server
         if (p == null || string.IsNullOrWhiteSpace(p.Email) || !p.Email.Contains('@'))
         {
             await Send(ws, new { Type = "SendEmailCodeResponse", Payload = new SendEmailCodeResponsePayload { Status = "InvalidEmail", Message = "Некорректный адрес почты." } });
+            return;
+        }
+
+        // Атомарный резерв попытки: false — лимит исчерпан
+        if (!db.TryReserveEmailSend(p.Email, TimeSpan.FromMinutes(15), maxAttempts: 3))
+        {
+            Console.WriteLine($"[RATE LIMIT] Превышен лимит отправки кодов для: {p.Email}");
+            await Send(ws, new { Type = "SendEmailCodeResponse", Payload = new SendEmailCodeResponsePayload { Status = "RateLimit", Message = "Слишком много запросов. Попробуйте через 15 минут." } });
             return;
         }
 
@@ -239,6 +250,7 @@ class Server
 
     /// <summary>
     /// Обрабатывает вход по email/паролю, создаёт сессию.
+    /// После успешного входа выталкивает накопленные офлайн-сообщения.
     /// </summary>
     static async Task<int?> ProcessLogin(BaseMessage msg, WebSocket ws)
     {
@@ -280,6 +292,10 @@ class Server
 
         // Затем рассылаем онлайн-статусы
         await NotifyOnlineStatus(userId, ws);
+
+        // Догоняющая доставка сообщений, пришедших пока клиент был офлайн
+        await PushPendingMessages(userId, ws);
+
         return userId;
     }
 
@@ -339,11 +355,17 @@ class Server
         });
 
         await NotifyOnlineStatus(userId, ws);
+
+        // Для нового пользователя pending-сообщений нет, но вызов оставлен для единообразия
+        // (на случай, если в будущем появится pre-registration-доставка).
+        await PushPendingMessages(userId, ws);
+
         return userId;
     }
 
     /// <summary>
     /// Повторное подключение уже известного клиента (по токену или ClientId).
+    /// После успешного Hello выталкивает накопленные офлайн-сообщения.
     /// </summary>
     static async Task<int?> ProcessHello(BaseMessage msg, WebSocket ws, int? current)
     {
@@ -381,7 +403,55 @@ class Server
         });
 
         await NotifyOnlineStatus(userId.Value, ws);
+
+        // Догоняющая доставка сообщений, пришедших пока клиент был офлайн
+        await PushPendingMessages(userId.Value, ws);
+
         return userId.Value;
+    }
+
+    /// <summary>
+    /// Отправляет клиенту все недоставленные сообщения (Status='Sent'),
+    /// адресованные ему. Вызывается после успешного Login / RegisterAccount / Hello.
+    /// </summary>
+    private static async Task PushPendingMessages(int userId, WebSocket ws)
+    {
+        var pending = db.GetPendingMessages(userId);
+        if (pending.Count == 0) return;
+
+        Console.WriteLine($"[PENDING] Отправка {pending.Count} недоставленных сообщений пользователю {userId}");
+        foreach (var hm in pending)
+        {
+            try
+            {
+                await Send(ws, new
+                {
+                    Type = "IncomingMessage",
+                    Payload = new IncomingMessagePayload
+                    {
+                        SenderId = hm.SenderId,
+                        MessageId = hm.MessageId,
+                        EncryptedKey = hm.EncryptedKey,
+                        EncryptedData = new EncryptedData
+                        {
+                            Nonce = hm.Nonce ?? "",
+                            Ciphertext = hm.Ciphertext ?? "",
+                            Tag = hm.Tag ?? ""
+                        },
+                        ContentType = hm.ContentType,
+                        FileName = hm.FileName,
+                        FileSize = hm.FileSize,
+                        FileTransferId = hm.FileTransferId
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[PENDING] Не удалось отправить сообщение {hm.MessageId}: {ex.Message}");
+                // Прерываем цикл: сокет, скорее всего, умер
+                return;
+            }
+        }
     }
 
     /// <summary>
@@ -484,7 +554,9 @@ class Server
         // Автоматически добавляем получателя в контакты
         db.AddContact(senderId, p.ReceiverId);
 
-        // Получатель не в сети — уведомляем отправителя
+        // Получатель не в сети — уведомляем отправителя.
+        // Сообщение остаётся в БД со Status='Sent' и будет доставлено
+        // при следующем Login/Hello получателя (PushPendingMessages).
         if (!clients.TryGetValue(p.ReceiverId, out var recvWs) || recvWs.State != WebSocketState.Open)
         {
             await Send(ws, new { Type = "DeliveryStatus", Payload = new DeliveryStatusPayload { MessageId = p.MessageId, Status = "UserOffline" } });
@@ -559,17 +631,31 @@ class Server
     }
 
     /// <summary>
-    /// Обновляет имя пользователя и рассылает уведомление всем клиентам.
+    /// Обновляет имя пользователя и уведомляет ТОЛЬКО его контакты.
+    /// Раньше уведомление уходило всем подключённым клиентам — это была утечка
+    /// метаданных (пользователь узнавал о смене имени незнакомого человека)
+    /// и лишняя нагрузка O(N).
     /// </summary>
     static async Task ProcessUpdateProfile(BaseMessage msg, int clientId)
     {
         var p = msg.Payload.Deserialize<UpdateProfilePayload>();
         if (p == null) return;
         db.UpdateUserName(clientId, p.UserName);
-        var notification = new { Type = "UserProfileUpdated", Payload = new UserProfileUpdatedPayload { UserId = clientId, UserName = p.UserName } };
-        foreach (var clientWs in clients.Values)
+
+        var notification = new
         {
-            await Send(clientWs, notification);
+            Type = "UserProfileUpdated",
+            Payload = new UserProfileUpdatedPayload { UserId = clientId, UserName = p.UserName }
+        };
+
+        // Рассылка только тем, у кого пользователь есть в контактах (связи симметричны)
+        foreach (var contactId in db.GetContactIds(clientId))
+        {
+            if (clients.TryGetValue(contactId, out var contactWs) && contactWs.State == WebSocketState.Open)
+            {
+                try { await Send(contactWs, notification); }
+                catch { }
+            }
         }
     }
 
