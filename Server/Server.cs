@@ -1,5 +1,4 @@
-﻿using SecureChat.Client.Services;
-using SecureChat.Common;
+﻿using SecureChat.Common;
 using System;
 using System.Collections.Concurrent;
 using System.IO;

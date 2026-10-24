@@ -6,9 +6,9 @@
 		<Nullable>enable</Nullable>
 	</PropertyGroup>
 	<ItemGroup>
-	  <Compile Remove="Services\**" />
-	  <EmbeddedResource Remove="Services\**" />
-	  <None Remove="Services\**" />
+		<Compile Remove="Services\**" />
+		<EmbeddedResource Remove="Services\**" />
+		<None Remove="Services\**" />
 	</ItemGroup>
 
 	<ItemGroup>
