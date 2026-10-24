@@ -1,7 +1,7 @@
 ﻿<Window x:Class="SecureChat.Client.View.LoginWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SecureChat - Корпоративный вход" Height="416" Width="380"
+        Title="SecureChat - Корпоративный вход" Height="440" Width="380"
         WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
         Background="{DynamicResource WindowBackground}"
         Foreground="{DynamicResource ForegroundColor}">
@@ -23,23 +23,40 @@
             <RadioButton x:Name="RegisterRadio" Content="Регистрация нового сотрудника" Checked="ModeRadio_Checked" Foreground="{DynamicResource ForegroundColor}"/>
         </StackPanel>
 
-        <StackPanel Grid.Row="2">
-            <TextBlock Text="Email:" FontSize="12" Margin="0,0,0,4" Foreground="{DynamicResource ForegroundColor}"/>
-            <TextBox x:Name="LoginBox" Height="28" Padding="4" Margin="0,0,0,10"
-                     Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}" BorderBrush="{DynamicResource StatusForeground}"/>
-
-            <StackPanel x:Name="NamePanel" Visibility="Collapsed" Margin="0,0,0,10">
-                <TextBlock Text="ФИО сотрудника:" FontSize="12" Margin="0,0,0,4" Foreground="{DynamicResource ForegroundColor}"/>
-                <TextBox x:Name="NameBox" Height="28" Padding="4"
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- Email -->
+                <TextBlock Text="Email:" FontSize="12" Margin="0,0,0,4" Foreground="{DynamicResource ForegroundColor}"/>
+                <TextBox x:Name="LoginBox" Height="28" Padding="4" Margin="0,0,0,10"
                          Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}" BorderBrush="{DynamicResource StatusForeground}"/>
+
+                <!-- ФИО (при регистрации) -->
+                <StackPanel x:Name="NamePanel" Visibility="Collapsed" Margin="0,0,0,10">
+                    <TextBlock Text="ФИО сотрудника:" FontSize="12" Margin="0,0,0,4" Foreground="{DynamicResource ForegroundColor}"/>
+                    <TextBox x:Name="NameBox" Height="28" Padding="4"
+                             Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}" BorderBrush="{DynamicResource StatusForeground}"/>
+                </StackPanel>
+
+                <!-- Пароль -->
+                <TextBlock Text="Пароль:" FontSize="12" Margin="0,0,0,4" Foreground="{DynamicResource ForegroundColor}"/>
+                <PasswordBox x:Name="PasswordBox" Height="28" Padding="4" Margin="0,0,0,10"
+                             Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}" BorderBrush="{DynamicResource StatusForeground}"/>
+
+                <!-- Блок кода подтверждения (только при регистрации) -->
+                <StackPanel x:Name="CodePanel" Visibility="Collapsed" Margin="0,0,0,10">
+                    <Grid Margin="0,0,0,4">
+                        <TextBlock Text="Код из письма:" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource ForegroundColor}"/>
+                        <Button x:Name="GetCodeButton" Content="Получить код" HorizontalAlignment="Right" Padding="8,2"
+                                Background="Transparent" Foreground="#FF1E88E5" BorderThickness="0" Cursor="Hand" Click="GetCodeButton_Click"/>
+                    </Grid>
+                    <TextBox x:Name="CodeBox" Height="28" Padding="4" MaxLength="6"
+                             Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}" BorderBrush="{DynamicResource StatusForeground}"/>
+                </StackPanel>
+
+                <!-- Статус / Ошибка -->
+                <TextBlock x:Name="StatusTextBlock" Text="" Foreground="#FFF44336" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
             </StackPanel>
-
-            <TextBlock Text="Пароль:" FontSize="12" Margin="0,0,0,4" Foreground="{DynamicResource ForegroundColor}"/>
-            <PasswordBox x:Name="PasswordBox" Height="28" Padding="4" Margin="0,0,0,10"
-                         Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}" BorderBrush="{DynamicResource StatusForeground}"/>
-
-            <TextBlock x:Name="StatusTextBlock" Text="" Foreground="#FFF44336" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"/>
-        </StackPanel>
+        </ScrollViewer>
 
         <Button x:Name="SubmitButton" Grid.Row="3" Content="Войти" Height="34" FontSize="13" FontWeight="SemiBold"
                 Background="#FF1E88E5" Foreground="White" BorderThickness="0" Click="SubmitButton_Click" Cursor="Hand"/>
