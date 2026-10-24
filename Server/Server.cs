@@ -1,4 +1,5 @@
-﻿using SecureChat.Common;
+﻿using Microsoft.Extensions.Configuration;
+using SecureChat.Common;
 using System;
 using System.Collections.Concurrent;
 using System.IO;
@@ -21,10 +22,31 @@ class Server
     // Персональные семафоры на сокет — защищают SendAsync от параллельных вызовов
     static ConcurrentDictionary<WebSocket, SemaphoreSlim> socketLocks = new();
     static Database db = new();
-    static EmailService emailService = new();
+    // Без инициализации — заполним через Initialize
+    static EmailService emailService = null!;
+
+    // Вызывается один раз при старте приложения
+    public static void Initialize(IConfiguration configuration)
+    {
+        emailService = new EmailService(configuration);
+    }
 
     static async Task Main()
     {
+        // 1. Собираем конфигурацию: user secrets + переменные окружения
+        var configuration = new ConfigurationBuilder()
+                    .AddUserSecrets<Server>(optional: true)
+                    .AddEnvironmentVariables()
+                    .Build();
+
+        // 2. Передаём её в EmailService
+        Initialize(configuration);
+
+        // 3. Диагностика: покажет, подхватились ли креды (без вывода самого пароля)
+        var email = configuration["Smtp:SenderEmail"];
+        var password = configuration["Smtp:SenderPassword"];
+        Console.WriteLine($"[EMAIL INIT] sender={(string.IsNullOrWhiteSpace(email) ? "<NOT SET>" : email)}, password={(string.IsNullOrWhiteSpace(password) ? "<NOT SET>" : "<set>")}");
+
         db.Initialize();
 
         var listener = new HttpListener();

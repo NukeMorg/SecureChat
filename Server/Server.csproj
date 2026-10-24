@@ -4,7 +4,8 @@
 		<TargetFramework>net9.0</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
-	</PropertyGroup>
+	  <UserSecretsId>e0771e05-958e-4eb3-99f6-9384a953c004</UserSecretsId>
+  </PropertyGroup>
 	<ItemGroup>
 		<Compile Remove="Services\**" />
 		<EmbeddedResource Remove="Services\**" />
@@ -13,6 +14,10 @@
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+		<PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.13" />
+		<PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.13" />
+		<PackageReference Include="Microsoft.Extensions.Configuration.FileExtensions" Version="10.0.13" />
+		<PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.13" />
 	</ItemGroup>
 
 	<ItemGroup>

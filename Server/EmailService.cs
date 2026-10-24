@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Mail;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 
 namespace SecureChat.Server;
 
@@ -15,9 +16,16 @@ public class EmailService
     // Настройки SMTP-сервера (например, smtp.gmail.com, порт 587)
     private readonly string _smtpHost = "smtp.gmail.com";
     private readonly int _smtpPort = 587;
-    private readonly string _senderEmail = "";     // Почта отправителя
-    private readonly string _senderPassword = "";  // Пароль приложения (App Password)
-    private readonly bool _useRealSmtp = false;    // true — реальная отправка; false — только лог в консоль
+    private readonly string _senderEmail;     // Почта отправителя
+    private readonly string _senderPassword;  // Пароль приложения (App Password)
+    private readonly bool _useRealSmtp = true;    // true — реальная отправка; false — только лог в консоль
+
+    // Конструктор для получения настроек из DI-контейнера
+    public EmailService(IConfiguration configuration)
+    {
+        _senderEmail = configuration["Smtp:SenderEmail"]!;
+        _senderPassword = configuration["Smtp:SenderPassword"]!;
+    }
 
     /// <summary>
     /// Генерирует 6-значный код (криптографически стойкий).
