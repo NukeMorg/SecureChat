@@ -2,7 +2,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
-using SecureChat.Common;
+using SecureChat.Core;
 using Serilog;
 
 namespace SecureChat.Client.Services;

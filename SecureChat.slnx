@@ -1,7 +1,5 @@
 <Solution>
-  <Folder Name="/Элементы решения/">
-    <File Path="Shared/MessageTypes.cs" />
-  </Folder>
+  <Project Path="Core/SecureChat.Core.csproj" />
   <Project Path="Client/Client.csproj" />
   <Project Path="Server/Server.csproj" />
 </Solution>

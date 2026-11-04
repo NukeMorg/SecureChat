@@ -14,7 +14,7 @@ using System.Windows.Media;
 using SecureChat.Client.Models;
 using SecureChat.Client.Services;
 using SecureChat.Client.View;
-using SecureChat.Common;
+using SecureChat.Core;
 using Serilog;
 
 namespace SecureChat.Client;

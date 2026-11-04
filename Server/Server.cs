@@ -1,5 +1,5 @@
 ﻿using Microsoft.Extensions.Configuration;
-using SecureChat.Common;
+using SecureChat.Core;
 using Serilog;
 using Serilog.Context;
 using System;
