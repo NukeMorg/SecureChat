@@ -30,6 +30,7 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\Core\SecureChat.Core.csproj" />
+		<ProjectReference Include="..\Security\SecureChat.Security.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

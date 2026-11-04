@@ -35,7 +35,7 @@ public class Program
         app.MapGet("/health", () => Results.Text("Healthy", "text/plain"));
         app.MapGet("/", () => "SecureChat Server is Running");
 
-        Log.Information("=== SecureChat Server запуск на {Machine} ===", Environment.MachineName);
+        Log.Information("=== SecureChat Server started on {Machine} ===", Environment.MachineName);
         app.Services.GetRequiredService<Database>().Initialize();
 
         try
@@ -44,7 +44,7 @@ public class Program
         }
         catch (Exception ex)
         {
-            Log.Fatal(ex, "Фатальная ошибка при запуске сервера");
+            Log.Fatal(ex, "Fatal error while running the server");
             throw;
         }
         finally

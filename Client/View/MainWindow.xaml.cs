@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -111,7 +112,7 @@ public partial class MainWindow : Window
         };
 
         UpdateTitleAndStatus();
-        Log.Information("MainWindow открыт userId={UserId}", _clientId);
+        Log.Information("MainWindow opened userId={UserId}", _clientId);
 
         this.Loaded += async (s, e) => { await _network.GetContactsAsync(); };
     }
@@ -244,14 +245,14 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Ошибка переподключения");
-            MessageBox.Show($"Ошибка переподключения: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            Log.Error(ex, "Reconnect failed");
+            MessageBox.Show($"Reconnect failed: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
-    private void SwitchAccount_Click(object sender, RoutedEventArgs e)
+    private async void SwitchAccount_Click(object sender, RoutedEventArgs e)
     {
-        _network.Disconnect();
+        await _network.DisconnectAsync(logout: true);
         LoginWindow.ClearAutoLoginState();
         var app = (App)Application.Current;
         app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -279,7 +280,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Ошибка смены учётной записи");
+            Log.Error(ex, "Account switch failed");
             app.Shutdown();
             throw;
         }
@@ -382,7 +383,7 @@ public partial class MainWindow : Window
                         ContentType = "Text",
                         Status = hm.Status,
                         IsOutgoing = hm.SenderId == _clientId,
-                        Timestamp = DateTime.Parse(hm.Timestamp)
+                        Timestamp = DateTime.Parse(hm.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
                     });
                 }
                 else if (hm.ContentType == "File")
@@ -396,7 +397,7 @@ public partial class MainWindow : Window
                         ContentType = "File",
                         Status = hm.Status,
                         IsOutgoing = hm.SenderId == _clientId,
-                        Timestamp = DateTime.Parse(hm.Timestamp)
+                        Timestamp = DateTime.Parse(hm.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
                     });
                 }
                 existingIds.Add(hm.MessageId);
@@ -422,7 +423,7 @@ public partial class MainWindow : Window
             }
             if (_contacts.Count > 0 && _currentContactId == -1)
                 ContactsListBox.SelectedIndex = 0;
-            Log.Debug("ContactList получен count={Count}", list.Contacts.Count);
+            Log.Debug("ContactList received count={Count}", list.Contacts.Count);
         });
     }
 
@@ -516,7 +517,7 @@ public partial class MainWindow : Window
                     }
                     catch (Exception ex)
                     {
-                        Log.Error(ex, "Ошибка приёма файла messageId={MessageId}", messageId);
+                        Log.Error(ex, "File receive error messageId={MessageId}", messageId);
                         Dispatcher.Invoke(() => MessageBox.Show(
                             $"Ошибка приёма файла: {ex.Message}",
                             "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error));
@@ -633,7 +634,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Не удалось отправить сообщение contactId={ContactId}", _currentContactId);
+            Log.Error(ex, "Failed to send message contactId={ContactId}", _currentContactId);
             MessageBox.Show($"Не удалось отправить сообщение: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -676,7 +677,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Не удалось отправить файл contactId={ContactId}", _currentContactId);
+            Log.Error(ex, "Failed to send file contactId={ContactId}", _currentContactId);
             MessageBox.Show($"Не удалось отправить файл: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -694,7 +695,7 @@ public partial class MainWindow : Window
     {
         string newTheme = App.CurrentTheme == "Dark" ? "Light" : "Dark";
         App.ApplyTheme(newTheme);
-        Log.Information("Тема изменена на {Theme}", newTheme);
+        Log.Information("Theme changed to {Theme}", newTheme);
     }
 
     private async void ChangeName_Click(object sender, RoutedEventArgs e)
@@ -712,8 +713,8 @@ public partial class MainWindow : Window
 
     private void Window_Closing(object sender, CancelEventArgs e)
     {
-        Log.Information("Закрытие MainWindow userId={UserId}", _clientId);
-        _network.Disconnect();
+        Log.Information("Closing MainWindow userId={UserId}", _clientId);
+        _ = _network.DisconnectAsync(logout: true);
     }
 
     private string? ShowInputDialog(string title, string defaultText)

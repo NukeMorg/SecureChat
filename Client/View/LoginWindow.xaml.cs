@@ -257,9 +257,9 @@ public partial class LoginWindow : Window
             var completed = await Task.WhenAny(_loginTcs.Task, Task.Delay(8000));
             if (completed != _loginTcs.Task)
             {
-                Log.Warning("Таймаут авторизации");
+                Log.Warning("Login timeout");
                 StatusTextBlock.Text = "";
-                ShowErrorPopup("Таймаут авторизации. Сервер не отвечает.");
+                ShowErrorPopup("Login timeout. Сервер не отвечает.");
                 SubmitButton.IsEnabled = true;
                 return;
             }
@@ -287,10 +287,10 @@ public partial class LoginWindow : Window
                     var keys = _crypto.GenerateRsaKeyPair();
                     PublicKeyPem = keys.publicKey;
                     PrivateKeyPem = keys.privateKey;
-                    Log.Warning("Сгенерированы новые ключи для userId={UserId} (история недоступна)", resp.UserId);
+                    Log.Warning("New keys generated for userId={UserId} (history unavailable)", resp.UserId);
                 }
 
-                Log.Information("Вход выполнен userId={UserId}", resp.UserId);
+                Log.Information("Login successful userId={UserId}", resp.UserId);
                 Log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Login", resp.UserId);
 
                 SaveConfig(email, isRegistration: false);
@@ -300,16 +300,20 @@ public partial class LoginWindow : Window
             }
             else
             {
-                Log.Warning("Вход отклонён status={Status}", resp.Status);
+                Log.Warning("Login rejected status={Status}", resp.Status);
                 StatusTextBlock.Text = "";
-                ShowErrorPopup(resp.Status == "InvalidCredentials"
-                    ? "Неверная почта или пароль." : "Пользователь не найден.");
+                ShowErrorPopup(resp.Status switch
+                {
+                    "InvalidCredentials" => "Неверная почта или пароль.",
+                    "RateLimited" => "Слишком много попыток входа. Попробуйте через 15 минут.",
+                    _ => "Пользователь не найден."
+                });
                 SubmitButton.IsEnabled = true;
             }
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Ошибка в LoginAsync");
+            Log.Error(ex, "Error in LoginAsync");
             StatusTextBlock.Text = "";
             ShowErrorPopup($"Ошибка: {ex.Message}");
             SubmitButton.IsEnabled = true;
@@ -345,9 +349,9 @@ public partial class LoginWindow : Window
             var completed = await Task.WhenAny(_codeTcs.Task, Task.Delay(8000));
             if (completed != _codeTcs.Task)
             {
-                Log.Warning("Таймаут отправки кода");
+                Log.Warning("Code send timeout");
                 StatusTextBlock.Text = "";
-                ShowErrorPopup("Таймаут отправки кода. Сервер не отвечает.");
+                ShowErrorPopup("Code send timeout. Сервер не отвечает.");
                 SubmitButton.IsEnabled = true;
                 return;
             }
@@ -355,7 +359,7 @@ public partial class LoginWindow : Window
             var resp = await _codeTcs.Task;
             if (resp.Status != "Ok")
             {
-                Log.Warning("SendEmailCode отклонён status={Status}", resp.Status);
+                Log.Warning("SendEmailCode rejected status={Status}", resp.Status);
                 StatusTextBlock.Text = "";
                 ShowErrorPopup(resp.Message);
                 SubmitButton.IsEnabled = true;
@@ -381,7 +385,7 @@ public partial class LoginWindow : Window
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Ошибка в StartRegistrationAsync");
+            Log.Error(ex, "Error in StartRegistrationAsync");
             StatusTextBlock.Text = "";
             ShowErrorPopup($"Ошибка: {ex.Message}");
             SubmitButton.IsEnabled = true;
@@ -432,9 +436,9 @@ public partial class LoginWindow : Window
             var completed = await Task.WhenAny(_registerTcs.Task, Task.Delay(8000));
             if (completed != _registerTcs.Task)
             {
-                Log.Warning("Таймаут регистрации");
+                Log.Warning("Registration timeout");
                 StatusTextBlock.Text = "";
-                ShowErrorPopup("Таймаут регистрации. Сервер не отвечает.");
+                ShowErrorPopup("Registration timeout. Сервер не отвечает.");
                 SubmitButton.IsEnabled = true;
                 return;
             }
@@ -446,7 +450,7 @@ public partial class LoginWindow : Window
                 AuthenticatedUserName = _pendingName;
                 Token = resp.Token;
 
-                Log.Information("Регистрация успешна userId={UserId}", resp.AssignedId);
+                Log.Information("Registration successful userId={UserId}", resp.AssignedId);
                 Log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Register", resp.AssignedId);
 
                 SaveConfig(_pendingEmail, isRegistration: true);
@@ -456,7 +460,7 @@ public partial class LoginWindow : Window
             }
             else
             {
-                Log.Warning("Регистрация отклонена status={Status}", resp.Status);
+                Log.Warning("Registration rejected status={Status}", resp.Status);
                 StatusTextBlock.Text = "";
                 ShowErrorPopup(resp.Status switch
                 {
@@ -470,7 +474,7 @@ public partial class LoginWindow : Window
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Ошибка в ConfirmRegistrationAsync");
+            Log.Error(ex, "Error in ConfirmRegistrationAsync");
             StatusTextBlock.Text = "";
             ShowErrorPopup($"Ошибка: {ex.Message}");
             SubmitButton.IsEnabled = true;
@@ -503,24 +507,24 @@ public partial class LoginWindow : Window
                 var resp = await _codeTcs.Task;
                 if (resp.Status == "Ok")
                 {
-                    Log.Information("Код отправлен повторно");
+                    Log.Information("Code resent");
                     StatusTextBlock.Foreground = Brushes.LimeGreen;
                     StatusTextBlock.Text = "Новый код отправлен.";
                 }
                 else
                 {
-                    Log.Warning("ResendCode отклонён status={Status}", resp.Status);
+                    Log.Warning("ResendCode rejected status={Status}", resp.Status);
                     ShowErrorPopup(resp.Message);
                 }
             }
             else
             {
-                ShowErrorPopup("Таймаут отправки кода.");
+                ShowErrorPopup("Code send timeout.");
             }
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Ошибка в ResendCodeButton_Click");
+            Log.Error(ex, "Error in ResendCodeButton_Click");
             ShowErrorPopup($"Ошибка: {ex.Message}");
         }
         finally { ResendCodeButton.IsEnabled = true; }
@@ -540,7 +544,11 @@ public partial class LoginWindow : Window
             if (cfg == null) return;
 
             if (cfg.TryGetValue("PublicKey", out var pub)) PublicKeyPem = pub;
-            if (cfg.TryGetValue("PrivateKey", out var priv)) PrivateKeyPem = priv;
+            if (cfg.TryGetValue("PrivateKey", out var priv))
+            {
+                string? decrypted = SecretProtector.Unprotect(priv);
+                if (decrypted != null) PrivateKeyPem = decrypted;
+            }
             bool remember = cfg.TryGetValue("RememberMe", out var rem) && rem == "true";
             RememberMeCheckBox.IsChecked = remember;
             if (remember && cfg.TryGetValue("Login", out var log) && !string.IsNullOrWhiteSpace(log))
@@ -548,7 +556,7 @@ public partial class LoginWindow : Window
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Не удалось прочитать config.json");
+            Log.Warning(ex, "Failed to read config.json");
         }
     }
 
@@ -561,9 +569,10 @@ public partial class LoginWindow : Window
             {
                 ["ClientId"] = AuthenticatedUserId.ToString(),
                 ["UserName"] = AuthenticatedUserName,
-                ["Token"] = Token,
+                // секреты шифруются через DPAPI (CurrentUser)
+                ["Token"] = SecretProtector.Protect(Token),
                 ["PublicKey"] = PublicKeyPem,
-                ["PrivateKey"] = PrivateKeyPem,
+                ["PrivateKey"] = SecretProtector.Protect(PrivateKeyPem),
                 ["Theme"] = App.CurrentTheme
             };
 
@@ -579,11 +588,11 @@ public partial class LoginWindow : Window
             }
 
             File.WriteAllText(ConfigFile, JsonSerializer.Serialize(cfg));
-            Log.Debug("config.json сохранён");
+            Log.Debug("config.json saved");
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Не удалось сохранить config.json");
+            Log.Error(ex, "Failed to save config.json");
         }
     }
 
@@ -600,7 +609,7 @@ public partial class LoginWindow : Window
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Не удалось очистить автологин");
+            Log.Warning(ex, "Failed to clear auto-login");
         }
     }
 
@@ -612,16 +621,21 @@ public partial class LoginWindow : Window
             var cfg = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, string>>(File.ReadAllText(ConfigFile));
             if (cfg == null) return null;
             if (!cfg.TryGetValue("RememberMe", out var rem) || rem != "true") return null;
-            if (!cfg.TryGetValue("Token", out var token) || string.IsNullOrEmpty(token)) return null;
+            if (!cfg.TryGetValue("Token", out var tokenRaw) || string.IsNullOrEmpty(tokenRaw)) return null;
             if (!cfg.TryGetValue("PublicKey", out var pub) || string.IsNullOrEmpty(pub)) return null;
-            if (!cfg.TryGetValue("PrivateKey", out var priv) || string.IsNullOrEmpty(priv)) return null;
+            if (!cfg.TryGetValue("PrivateKey", out var privRaw) || string.IsNullOrEmpty(privRaw)) return null;
             if (!cfg.TryGetValue("ClientId", out var idStr) || !int.TryParse(idStr, out var id)) return null;
             if (!cfg.TryGetValue("UserName", out var name) || string.IsNullOrEmpty(name)) return null;
-            return new AutoLoginSession(id, name, token, pub, priv);
+
+            string? token = SecretProtector.Unprotect(tokenRaw);
+            string? privateKey = SecretProtector.Unprotect(privRaw);
+            if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(privateKey)) return null;
+
+            return new AutoLoginSession(id, name, token, pub, privateKey);
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Не удалось прочитать автологин");
+            Log.Warning(ex, "Failed to read auto-login");
             return null;
         }
     }

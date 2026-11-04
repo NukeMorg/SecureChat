@@ -1,9 +1,10 @@
 ﻿using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
-using System.Security.Cryptography;
 using SecureChat.Core;
+using SecureChat.Security;
 using Serilog;
 using ILogger = Serilog.ILogger;
 
@@ -42,6 +43,8 @@ public class Database
                 Token TEXT PRIMARY KEY,
                 UserId INTEGER NOT NULL,
                 CreatedAt TEXT NOT NULL,
+                ExpiresAt TEXT,
+                IsRevoked INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (UserId) REFERENCES Clients(Id)
             );
             CREATE TABLE IF NOT EXISTS Messages (
@@ -75,9 +78,47 @@ public class Database
                 Email TEXT NOT NULL,
                 LastSentAt TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_email_rate ON EmailRateLimits(Email, LastSentAt);";
+            CREATE INDEX IF NOT EXISTS idx_email_rate ON EmailRateLimits(Email, LastSentAt);
+            CREATE TABLE IF NOT EXISTS LoginAttempts (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Email TEXT NOT NULL,
+                IpAddress TEXT NOT NULL,
+                AttemptedAt TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_login_attempts ON LoginAttempts(Email, AttemptedAt);";
         cmd.ExecuteNonQuery();
-        Log.Information("База данных инициализирована: {DbPath}", Path.GetFullPath("server.db"));
+        Migrate(conn);
+        Log.Information("Database initialized: {DbPath}", Path.GetFullPath("server.db"));
+    }
+
+    /// <summary>Миграции существующей схемы: добавление колонок через ALTER TABLE.</summary>
+    private static void Migrate(SqliteConnection conn)
+    {
+        bool addedExpiresAt = TryAddColumn(conn, "Sessions", "ExpiresAt", "TEXT");
+        TryAddColumn(conn, "Sessions", "IsRevoked", "INTEGER NOT NULL DEFAULT 0");
+        if (addedExpiresAt)
+        {
+            // легаси-сессии были бессрочными: продлеваем их на 7 дней с момента миграции
+            using var backfill = conn.CreateCommand();
+            backfill.CommandText = "UPDATE Sessions SET ExpiresAt = @e WHERE ExpiresAt IS NULL";
+            backfill.Parameters.AddWithValue("@e", DateTime.UtcNow.AddDays(7).ToString("o"));
+            backfill.ExecuteNonQuery();
+        }
+    }
+
+    private static bool TryAddColumn(SqliteConnection conn, string table, string column, string type)
+    {
+        try
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {type};";
+            cmd.ExecuteNonQuery();
+            return true;
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        {
+            return false; // колонка уже существует
+        }
     }
 
     public void SaveVerificationCode(string email, string code, TimeSpan ttl)
@@ -110,7 +151,7 @@ public class Database
         if (!reader.Read()) return CodeVerifyResult.Invalid;
 
         string savedCode = reader.GetString(0);
-        DateTime expiresAt = DateTime.Parse(reader.GetString(1));
+        DateTime expiresAt = DateTime.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
 
         if (DateTime.UtcNow > expiresAt)
         {
@@ -132,6 +173,46 @@ public class Database
         var cmd = conn.CreateCommand();
         cmd.CommandText = "DELETE FROM EmailVerifications WHERE Email = @email";
         cmd.Parameters.AddWithValue("@email", email);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Блокировка брутфорса: не более maxAttempts неудачных входов за window по email ИЛИ по IP.</summary>
+    public bool IsLoginBlocked(string email, string ipAddress, TimeSpan window, int maxAttempts)
+    {
+        string normEmail = email.Trim().ToLowerInvariant();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        CleanupLoginAttempts(conn, window);
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT COUNT(*) FROM LoginAttempts
+            WHERE AttemptedAt > @cutoff AND (Email = @email OR IpAddress = @ip)";
+        cmd.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.Subtract(window).ToString("o"));
+        cmd.Parameters.AddWithValue("@email", normEmail);
+        cmd.Parameters.AddWithValue("@ip", ipAddress);
+        return (long)cmd.ExecuteScalar()! >= maxAttempts;
+    }
+
+    public void RecordFailedLogin(string email, string ipAddress)
+    {
+        string normEmail = email.Trim().ToLowerInvariant();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO LoginAttempts (Email, IpAddress, AttemptedAt)
+            VALUES (@email, @ip, @time)";
+        cmd.Parameters.AddWithValue("@email", normEmail);
+        cmd.Parameters.AddWithValue("@ip", ipAddress);
+        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void CleanupLoginAttempts(SqliteConnection conn, TimeSpan window)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM LoginAttempts WHERE AttemptedAt <= @cutoff";
+        cmd.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.Subtract(window).ToString("o"));
         cmd.ExecuteNonQuery();
     }
 
@@ -161,19 +242,20 @@ public class Database
 
     public static (string hash, string salt) HashPassword(string password)
     {
-        byte[] saltBytes = RandomNumberGenerator.GetBytes(16);
-        string salt = Convert.ToBase64String(saltBytes);
-        using var pbkdf2 = new Rfc2898DeriveBytes(password, saltBytes, 10000, HashAlgorithmName.SHA256);
-        byte[] hashBytes = pbkdf2.GetBytes(32);
-        return (Convert.ToBase64String(hashBytes), salt);
+        // Новые хэши — BCrypt; соль хранится внутри строки хэша.
+        return (PasswordHasher.Hash(password), string.Empty);
     }
 
-    public static bool VerifyPassword(string password, string storedHash, string storedSalt)
+    private void UpgradePasswordHash(int userId, string bcryptHash)
     {
-        byte[] saltBytes = Convert.FromBase64String(storedSalt);
-        using var pbkdf2 = new Rfc2898DeriveBytes(password, saltBytes, 10000, HashAlgorithmName.SHA256);
-        byte[] hashBytes = pbkdf2.GetBytes(32);
-        return Convert.ToBase64String(hashBytes) == storedHash;
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Clients SET PasswordHash = @hash, Salt = NULL WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@hash", bcryptHash);
+        cmd.Parameters.AddWithValue("@id", userId);
+        cmd.ExecuteNonQuery();
+        Log.Debug("Password hash upgraded to BCrypt for userId={UserId}", userId);
     }
 
     public (int id, string token)? RegisterUser(string email, string password, string userName, string publicKey)
@@ -201,7 +283,7 @@ public class Database
 
         int id = Convert.ToInt32(insertCmd.ExecuteScalar());
         string token = CreateSessionInternal(conn, id);
-        Log.Debug("RegisterUser создан userId={UserId}", id);
+        Log.Debug("RegisterUser created userId={UserId}", id);
         return (id, token);
     }
 
@@ -219,26 +301,32 @@ public class Database
             int id = reader.GetInt32(0);
             string name = reader.GetString(1);
             string hash = reader.GetString(2);
-            string salt = reader.GetString(3);
-            if (VerifyPassword(password, hash, salt))
+            string salt = reader.IsDBNull(3) ? "" : reader.GetString(3);
+            if (PasswordHasher.VerifyAny(password, hash, salt, out string? upgradeHash))
             {
                 reader.Close();
+                if (upgradeHash != null) UpgradePasswordHash(id, upgradeHash);
                 string token = CreateSessionInternal(conn, id);
-                Log.Debug("Authenticate успешен для userId={UserId}", id);
+                Log.Debug("Authenticate successful for userId={UserId}", id);
                 return (id, name, token);
             }
         }
         return null;
     }
 
+    private const int SessionLifetimeDays = 7;
+
     private string CreateSessionInternal(SqliteConnection conn, int userId)
     {
         string token = Guid.NewGuid().ToString("N");
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO Sessions (Token, UserId, CreatedAt) VALUES (@token, @uid, @time)";
+        cmd.CommandText = @"
+            INSERT INTO Sessions (Token, UserId, CreatedAt, ExpiresAt, IsRevoked)
+            VALUES (@token, @uid, @time, @expires, 0)";
         cmd.Parameters.AddWithValue("@token", token);
         cmd.Parameters.AddWithValue("@uid", userId);
         cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("@expires", DateTime.UtcNow.AddDays(SessionLifetimeDays).ToString("o"));
         cmd.ExecuteNonQuery();
         return token;
     }
@@ -254,11 +342,45 @@ public class Database
     {
         using var conn = new SqliteConnection(cs);
         conn.Open();
+        CleanupSessions(conn);
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT UserId FROM Sessions WHERE Token = @token";
+        cmd.CommandText = @"
+            SELECT UserId FROM Sessions
+            WHERE Token = @token AND IsRevoked = 0 AND ExpiresAt > @now";
         cmd.Parameters.AddWithValue("@token", token);
+        cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("o"));
         var result = cmd.ExecuteScalar();
         return result != null ? Convert.ToInt32(result) : null;
+    }
+
+    /// <summary>Logout: удаление сессии по требованию 1.1.2.</summary>
+    public void RevokeSession(string token)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM Sessions WHERE Token = @token";
+        cmd.Parameters.AddWithValue("@token", token);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Отзыв всех сессий пользователя (смена пароля, бан).</summary>
+    public void RevokeAllUserSessions(int userId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM Sessions WHERE UserId = @uid";
+        cmd.Parameters.AddWithValue("@uid", userId);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void CleanupSessions(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM Sessions WHERE ExpiresAt <= @now OR IsRevoked = 1";
+        cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("o"));
+        cmd.ExecuteNonQuery();
     }
 
     public bool UserExists(int id)
@@ -346,7 +468,7 @@ public class Database
         cmd.ExecuteNonQuery();
         sw.Stop();
         if (sw.ElapsedMilliseconds > 100)
-            Log.Warning("SaveMessage медленно: {DurationMs}ms messageId={MessageId}", sw.ElapsedMilliseconds, messageId);
+            Log.Warning("SaveMessage slow: {DurationMs}ms messageId={MessageId}", sw.ElapsedMilliseconds, messageId);
     }
 
     public void UpdateMessageStatus(string messageId, string status)
