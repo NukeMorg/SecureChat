@@ -254,11 +254,13 @@ public class UserProfileUpdatedPayload
 }
 
 /// <summary>
-/// Запрос истории переписки с контактом.
+/// Запрос истории переписки с контактом: курсорная пагинация (до 50 сообщений старее BeforeTimestamp).
 /// </summary>
 public class GetHistoryRequestPayload
 {
     [JsonPropertyName("ContactId")] public int ContactId { get; set; }
+    [JsonPropertyName("BeforeTimestamp")] public string? BeforeTimestamp { get; set; }
+    [JsonPropertyName("Limit")] public int Limit { get; set; } = 50;
 }
 
 /// <summary>
@@ -280,15 +282,19 @@ public class HistoryMessage
     [JsonPropertyName("FileTransferId")] public string? FileTransferId { get; set; }
     [JsonPropertyName("Timestamp")] public string Timestamp { get; set; } = "";
     [JsonPropertyName("Status")] public string Status { get; set; } = "";
+    [JsonPropertyName("ReplyToMessageId")] public string? ReplyToMessageId { get; set; }
+    [JsonPropertyName("IsEdited")] public bool IsEdited { get; set; }
+    [JsonPropertyName("IsDeleted")] public bool IsDeleted { get; set; }
 }
 
 /// <summary>
-/// Ответ с историей сообщений.
+/// Ответ с историей сообщений (отсортирована по возрастанию времени).
 /// </summary>
 public class HistoryResponsePayload
 {
     [JsonPropertyName("ContactId")] public int ContactId { get; set; }
     [JsonPropertyName("Messages")] public List<HistoryMessage> Messages { get; set; } = new();
+    [JsonPropertyName("HasMore")] public bool HasMore { get; set; }
 }
 
 /// <summary>

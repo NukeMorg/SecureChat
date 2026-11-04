@@ -752,13 +752,19 @@ public class ChatHub : Hub
         _log.Debug("Ack Delivered messageId={MessageId}", p.MessageId);
     }
 
-    public async Task GetHistory(GetHistoryRequestPayload? p)
+    public Task<HistoryResponsePayload?> GetHistory(GetHistoryRequestPayload? p)
     {
-        int? userId = UserId;
-        if (userId == null || p == null || p.ContactId <= 0) return;
-        var messages = _db.GetHistory(userId.Value, p.ContactId);
-        _log.Debug("GetHistory userId={UserId} contactId={ContactId} count={Count}", userId.Value, p.ContactId, messages.Count);
-        await Respond("HistoryResponse", new HistoryResponsePayload { ContactId = p.ContactId, Messages = messages });
+        if (UserId is not int uid || p == null || p.ContactId <= 0)
+            return Task.FromResult<HistoryResponsePayload?>(null);
+
+        int limit = p.Limit is > 0 and <= 50 ? p.Limit : 50;
+        var (messages, hasMore) = _db.GetHistoryPage(uid, p.ContactId, p.BeforeTimestamp, limit);
+        return Task.FromResult<HistoryResponsePayload?>(new HistoryResponsePayload
+        {
+            ContactId = p.ContactId,
+            Messages = messages,
+            HasMore = hasMore
+        });
     }
 
     // ---------- Профиль и контакты ----------

@@ -40,6 +40,10 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, ObservableCollection<DialogMessage>> _allChannelMessages = new();
     private readonly Dictionary<string, Dictionary<int, string>> _channelMemberNames = new();
     private readonly HashSet<string> _loadedChannelIds = new();
+    private readonly Dictionary<int, bool> _directHasMore = new();
+    private readonly Dictionary<int, string> _oldestDirectTimestamp = new();
+    private readonly Dictionary<string, bool> _channelHasMore = new();
+    private readonly Dictionary<string, string> _oldestChannelTimestamp = new();
     private ChannelItem? _currentChannel;
 
     private NetworkService _network;
@@ -106,7 +110,6 @@ public partial class MainWindow : Window
         _network.OnIncomingChannelMessage += OnIncomingChannelMessage;
         _network.OnUserProfileUpdated += OnUserProfileUpdated;
         _network.OnUserInfoResponse += OnUserInfoResponse;
-        _network.OnHistoryResponse += OnHistoryResponse;
         _network.OnContactList += OnContactList;
         _network.OnAddContactResponse += OnAddContactResponse;
 
@@ -742,10 +745,20 @@ public partial class MainWindow : Window
     {
         if (_loadedChannelIds.Contains(channelId)) return;
         _loadedChannelIds.Add(channelId);
+        await LoadChannelHistoryPageAsync(channelId, loadMore: false);
+    }
 
+    /// <summary>Страница истории канала; loadMore — «Загрузить ещё» (prepend старых сообщений).</summary>
+    private async Task LoadChannelHistoryPageAsync(string channelId, bool loadMore)
+    {
+        string? before = loadMore && _oldestChannelTimestamp.TryGetValue(channelId, out var t) ? t : null;
         var resp = await _network.GetChannelHistoryAsync(new GetChannelHistoryPayload
-        { ChannelId = channelId, Limit = 50 });
+        { ChannelId = channelId, BeforeTimestamp = before, Limit = 50 });
         if (resp == null) return;
+
+        _channelHasMore[channelId] = resp.HasMore;
+        if (resp.Messages.Count > 0)
+            _oldestChannelTimestamp[channelId] = resp.Messages[0].Timestamp;
 
         var messages = resp.Messages;
         messages.Reverse(); // сервер отдаёт по убыванию времени; расшифровка — по возрастанию
@@ -765,7 +778,7 @@ public partial class MainWindow : Window
                     IsOutgoing = m.SenderId == _clientId,
                     SenderName = m.SenderId == _clientId ? "" : GetChannelMemberName(channelId, m.SenderId),
                     Timestamp = DateTime.Parse(m.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
-                });
+                }, prepend: loadMore);
                 continue;
             }
             if (m.ContentType != "Text" || string.IsNullOrEmpty(m.Ciphertext)) continue;
@@ -792,7 +805,7 @@ public partial class MainWindow : Window
                     IsOutgoing = m.SenderId == _clientId,
                     SenderName = m.SenderId == _clientId ? "" : GetChannelMemberName(channelId, m.SenderId),
                     Timestamp = DateTime.Parse(m.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
-                });
+                }, prepend: loadMore);
             }
             catch (Exception ex)
             {
@@ -801,12 +814,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private void AddChannelMessage(string channelId, DialogMessage msg)
+    private void AddChannelMessage(string channelId, DialogMessage msg, bool prepend = false)
     {
         if (!_allChannelMessages.ContainsKey(channelId))
             _allChannelMessages[channelId] = new ObservableCollection<DialogMessage>();
         if (_allChannelMessages[channelId].Any(m => m.Id == msg.Id)) return;
-        _allChannelMessages[channelId].Add(msg);
+        if (prepend) _allChannelMessages[channelId].Insert(0, msg);
+        else _allChannelMessages[channelId].Add(msg);
         if (_currentChannel?.Id == channelId)
             MessagesListBox.ItemsSource = _allChannelMessages[channelId];
     }
@@ -1064,16 +1078,29 @@ public partial class MainWindow : Window
         });
     }
 
-    private void OnHistoryResponse(HistoryResponsePayload history)
+    /// <summary>
+    /// Загрузка страницы Direct-истории (курсорная пагинация).
+    /// loadMore=false — первая страница при открытии диалога; true — «Загрузить ещё» (prepend).
+    /// </summary>
+    private async Task LoadDirectHistoryAsync(int contactId, bool loadMore)
     {
+        string? before = loadMore && _oldestDirectTimestamp.TryGetValue(contactId, out var t) ? t : null;
+        var resp = await _network.GetHistoryAsync(new GetHistoryRequestPayload
+        { ContactId = contactId, BeforeTimestamp = before, Limit = 50 });
+        if (resp == null) return;
+
+        _directHasMore[contactId] = resp.HasMore;
+        if (resp.Messages.Count > 0)
+            _oldestDirectTimestamp[contactId] = resp.Messages[0].Timestamp;
+
         Dispatcher.Invoke(() =>
         {
-            int contactId = history.ContactId;
             if (!_allDialogs.ContainsKey(contactId))
                 _allDialogs[contactId] = new ObservableCollection<DialogMessage>();
+            var dialog = _allDialogs[contactId];
+            var existingIds = new HashSet<string>(dialog.Select(m => m.Id));
 
-            var existingIds = new HashSet<string>(_allDialogs[contactId].Select(m => m.Id));
-            foreach (var hm in history.Messages)
+            foreach (var hm in resp.Messages)
             {
                 if (existingIds.Contains(hm.MessageId)) continue;
 
@@ -1106,13 +1133,14 @@ public partial class MainWindow : Window
 
                 if (sessionKey == null) continue;
 
+                DialogMessage dm;
                 if (hm.ContentType == "Text" && hm.Ciphertext != null && hm.Nonce != null && hm.Tag != null)
                 {
                     byte[] ct = Convert.FromBase64String(hm.Ciphertext);
                     byte[] n = Convert.FromBase64String(hm.Nonce);
                     byte[] t = Convert.FromBase64String(hm.Tag);
                     byte[] plain = _crypto.AesGcmDecrypt(sessionKey, n, ct, t);
-                    _allDialogs[contactId].Add(new DialogMessage
+                    dm = new DialogMessage
                     {
                         Id = hm.MessageId,
                         SenderId = hm.SenderId,
@@ -1122,11 +1150,11 @@ public partial class MainWindow : Window
                         Status = hm.Status,
                         IsOutgoing = hm.SenderId == _clientId,
                         Timestamp = DateTime.Parse(hm.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
-                    });
+                    };
                 }
                 else if (hm.ContentType == "File")
                 {
-                    _allDialogs[contactId].Add(new DialogMessage
+                    dm = new DialogMessage
                     {
                         Id = hm.MessageId,
                         SenderId = hm.SenderId,
@@ -1136,16 +1164,51 @@ public partial class MainWindow : Window
                         Status = hm.Status,
                         IsOutgoing = hm.SenderId == _clientId,
                         Timestamp = DateTime.Parse(hm.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
-                    });
+                    };
                 }
+                else continue;
+
+                if (hm.IsDeleted)
+                {
+                    dm.Text = "Сообщение удалено";
+                    dm.ContentType = "Text";
+                }
+                dm.IsEdited = hm.IsEdited;
+                dm.ReplyToMessageId = hm.ReplyToMessageId;
+
+                if (loadMore) dialog.Insert(0, dm); // «ещё» — старые сообщения сверху
+                else dialog.Add(dm);
                 existingIds.Add(hm.MessageId);
             }
 
-            Log.Debug("HistoryResponse contactId={ContactId} count={Count}", contactId, history.Messages.Count);
-
             if (_currentContactId == contactId)
-                MessagesListBox.ItemsSource = _allDialogs[contactId];
+            {
+                MessagesListBox.ItemsSource = dialog;
+                UpdateLoadMoreButton();
+            }
         });
+    }
+
+    private void UpdateLoadMoreButton()
+    {
+        bool hasMore = ListModeComboBox.SelectedIndex == 1
+            ? (_currentChannel != null && _channelHasMore.TryGetValue(_currentChannel.Id, out var ch) && ch)
+            : (_currentContactId > 0 && _directHasMore.TryGetValue(_currentContactId, out var dh) && dh);
+        LoadMoreButton.Visibility = hasMore ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async void LoadMore_Click(object sender, RoutedEventArgs e)
+    {
+        if (ListModeComboBox.SelectedIndex == 1)
+        {
+            if (_currentChannel == null) return;
+            await LoadChannelHistoryPageAsync(_currentChannel.Id, loadMore: true);
+        }
+        else if (_currentContactId > 0)
+        {
+            await LoadDirectHistoryAsync(_currentContactId, loadMore: true);
+        }
+        UpdateLoadMoreButton();
     }
 
     private void OnContactList(ContactListPayload list)
@@ -1313,7 +1376,8 @@ public partial class MainWindow : Window
             MessagesListBox.ItemsSource = _allDialogs[_currentContactId];
 
             if (_allDialogs[_currentContactId].Count == 0)
-                await _network.GetHistoryAsync(new GetHistoryRequestPayload { ContactId = contact.Id });
+                await LoadDirectHistoryAsync(contact.Id, loadMore: false);
+            UpdateLoadMoreButton();
         }
     }
 

@@ -218,10 +218,11 @@
                 </Grid.RowDefinitions>
 
                 <Border Background="{DynamicResource ChatAreaBackground}" CornerRadius="8" Padding="8">
-                    <ListBox x:Name="MessagesListBox"
-                             Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
-                             BorderThickness="0"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <Grid>
+                        <ListBox x:Name="MessagesListBox"
+                                 Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
+                                 BorderThickness="0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Grid HorizontalAlignment="{Binding IsOutgoing, Converter={StaticResource BoolToHorizontalAlignmentConverter}}" Margin="4">
@@ -260,6 +261,11 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                        <Button x:Name="LoadMoreButton" Content="↑ Загрузить ещё" Click="LoadMore_Click"
+                                HorizontalAlignment="Right" VerticalAlignment="Top"
+                                Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}"
+                                BorderThickness="0" Padding="8,3" FontSize="11" Margin="0,2,4,0" Visibility="Collapsed"/>
+                    </Grid>
                 </Border>
 
                 <Border Grid.Row="1" Background="{DynamicResource InputAreaBackground}" CornerRadius="8" Padding="5" Margin="0,5,0,0">

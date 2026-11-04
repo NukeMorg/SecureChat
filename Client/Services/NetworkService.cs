@@ -26,7 +26,6 @@ public class NetworkService
     public event Action<PublicKeyResponsePayload>? OnPublicKeyResponse;
     public event Action<UserProfileUpdatedPayload>? OnUserProfileUpdated;
     public event Action<UserInfoResponsePayload>? OnUserInfoResponse;
-    public event Action<HistoryResponsePayload>? OnHistoryResponse;
     public event Action<ContactListPayload>? OnContactList;
     public event Action<string>? OnError;
     public event Action? OnConnected;
@@ -124,7 +123,8 @@ public class NetworkService
 
     public Task AckAsync(AckPayload payload) => InvokeAsync("Ack", payload);
 
-    public Task GetHistoryAsync(GetHistoryRequestPayload payload) => InvokeAsync("GetHistory", payload);
+    public Task<HistoryResponsePayload?> GetHistoryAsync(GetHistoryRequestPayload payload) =>
+        InvokeWithResultAsync<HistoryResponsePayload>("GetHistory", payload);
 
     public Task GetContactsAsync() => InvokeAsync("GetContacts");
 
@@ -285,7 +285,6 @@ public class NetworkService
         hub.On<ContactListPayload>("ContactList", p => OnContactList?.Invoke(p));
         hub.On<UserProfileUpdatedPayload>("UserProfileUpdated", p => OnUserProfileUpdated?.Invoke(p));
         hub.On<UserInfoResponsePayload>("UserInfoResponse", p => OnUserInfoResponse?.Invoke(p));
-        hub.On<HistoryResponsePayload>("HistoryResponse", p => OnHistoryResponse?.Invoke(p));
         hub.On<AddContactResponsePayload>("AddContactResponse", p => OnAddContactResponse?.Invoke(p));
         hub.On<OnlineStatusPayload>("UserOnline", p => OnUserOnline?.Invoke(p.UserId));
         hub.On<OnlineStatusPayload>("UserOffline", p => OnUserOffline?.Invoke(p.UserId));

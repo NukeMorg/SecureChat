@@ -803,7 +803,12 @@ public class Database
         return result != null ? Convert.ToInt32(result) : null;
     }
 
-    public List<HistoryMessage> GetHistory(int userId1, int userId2)
+    /// <summary>
+    /// Страница истории Direct-диалога: до limit сообщений старее курсора (по убыванию времени),
+    /// признак HasMore для «Загрузить ещё».
+    /// </summary>
+    public (List<HistoryMessage> messages, bool hasMore) GetHistoryPage(
+        int user1, int user2, string? beforeTimestamp, int limit)
     {
         var list = new List<HistoryMessage>();
         using var conn = new SqliteConnection(cs);
@@ -811,16 +816,23 @@ public class Database
         var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             SELECT MessageId, SenderId, ReceiverId, EncryptedKey, EncryptedKeySelf, Nonce, Ciphertext, Tag,
-                   ContentType, FileName, FileSize, FileTransferId, Timestamp, Status
+                   ContentType, FileName, FileSize, FileTransferId, Timestamp, Status,
+                   ReplyToMessageId, IsEdited, DeletedAt
             FROM Messages
-            WHERE (SenderId = @user1 AND ReceiverId = @user2)
-               OR (SenderId = @user2 AND ReceiverId = @user1)
-            ORDER BY Timestamp ASC";
-        cmd.Parameters.AddWithValue("@user1", userId1);
-        cmd.Parameters.AddWithValue("@user2", userId2);
+            WHERE ChannelId IS NULL
+              AND ((SenderId = @user1 AND ReceiverId = @user2)
+                OR (SenderId = @user2 AND ReceiverId = @user1))
+              AND (@before IS NULL OR Timestamp < @before)
+            ORDER BY Timestamp DESC
+            LIMIT @limit";
+        cmd.Parameters.AddWithValue("@user1", user1);
+        cmd.Parameters.AddWithValue("@user2", user2);
+        cmd.Parameters.AddWithValue("@before", (object?)beforeTimestamp ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@limit", limit + 1); // +1 для признака HasMore
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            if (list.Count >= limit) continue; // лишнюю строку читаем только ради HasMore
             list.Add(new HistoryMessage
             {
                 MessageId = reader.GetString(0),
@@ -836,11 +848,35 @@ public class Database
                 FileSize = reader.GetInt64(10),
                 FileTransferId = reader.IsDBNull(11) ? null : reader.GetString(11),
                 Timestamp = reader.GetString(12),
-                Status = reader.GetString(13)
+                Status = reader.GetString(13),
+                ReplyToMessageId = reader.IsDBNull(14) ? null : reader.GetString(14),
+                IsEdited = !reader.IsDBNull(15) && reader.GetInt64(15) == 1,
+                IsDeleted = !reader.IsDBNull(16)
             });
         }
-        Log.Debug("GetHistory user1={U1} user2={U2} count={Count}", userId1, userId2, list.Count);
-        return list;
+        bool hasMore = false;
+        if (list.Count > 0)
+        {
+            hasMore = HasOlderDirectMessages(conn, user1, user2, list[^1].Timestamp);
+        }
+        list.Reverse(); // клиент ожидает по возрастанию времени
+        Log.Debug("GetHistoryPage user1={U1} user2={U2} count={Count} hasMore={HasMore}",
+            user1, user2, list.Count, hasMore);
+        return (list, hasMore);
+    }
+
+    private static bool HasOlderDirectMessages(SqliteConnection conn, int user1, int user2, string oldestTimestamp)
+    {
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT COUNT(*) FROM Messages
+            WHERE ChannelId IS NULL
+              AND ((SenderId = @u1 AND ReceiverId = @u2) OR (SenderId = @u2 AND ReceiverId = @u1))
+              AND Timestamp < @t";
+        cmd.Parameters.AddWithValue("@u1", user1);
+        cmd.Parameters.AddWithValue("@u2", user2);
+        cmd.Parameters.AddWithValue("@t", oldestTimestamp);
+        return (long)cmd.ExecuteScalar()! > 0;
     }
 
     public List<HistoryMessage> GetPendingMessages(int receiverId)
