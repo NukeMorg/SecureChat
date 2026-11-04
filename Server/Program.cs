@@ -1,47 +1,55 @@
 using SecureChat.Server;
 using Serilog;
 
-var builder = WebApplication.CreateBuilder(args);
+namespace SecureChat.Server;
 
-builder.Configuration.AddUserSecrets<Program>(optional: true);
-builder.Configuration.AddEnvironmentVariables();
-
-builder.Host.UseSerilog((context, cfg) =>
-    cfg.ReadFrom.Configuration(context.Configuration)
-       .Enrich.FromLogContext());
-
-builder.Services.AddSingleton<ConnectionRegistry>();
-builder.Services.AddSingleton<Database>();
-builder.Services.AddSingleton<EmailService>();
-
-builder.Services.AddSignalR(options =>
+public class Program
 {
-    // inline E2E-вложения: шифртекст файла + ключи + base64-накладные расходы
-    options.MaximumReceiveMessageSize = 12 * 1024 * 1024;
-});
+    public static async Task Main(string[] args)
+    {
+        var builder = WebApplication.CreateBuilder(args);
 
-string baseUrl = builder.Configuration["Server:BaseUrl"] ?? "http://*:9000";
-builder.WebHost.UseUrls(baseUrl);
+        builder.Configuration.AddUserSecrets<Program>(optional: true);
+        builder.Configuration.AddEnvironmentVariables();
 
-var app = builder.Build();
+        builder.Host.UseSerilog((context, cfg) =>
+            cfg.ReadFrom.Configuration(context.Configuration)
+               .Enrich.FromLogContext());
 
-app.MapHub<ChatHub>("/hub");
-app.MapGet("/health", () => Results.Text("Healthy", "text/plain"));
-app.MapGet("/", () => "SecureChat Server is Running");
+        builder.Services.AddSingleton<ConnectionRegistry>();
+        builder.Services.AddSingleton<Database>();
+        builder.Services.AddSingleton<EmailService>();
 
-Log.Information("=== SecureChat Server запуск на {Machine} ===", Environment.MachineName);
-app.Services.GetRequiredService<Database>().Initialize();
+        builder.Services.AddSignalR(options =>
+        {
+            // inline E2E-вложения: шифртекст файла + ключи + base64-накладные расходы
+            options.MaximumReceiveMessageSize = 12 * 1024 * 1024;
+        });
 
-try
-{
-    app.Run();
-}
-catch (Exception ex)
-{
-    Log.Fatal(ex, "Фатальная ошибка при запуске сервера");
-    throw;
-}
-finally
-{
-    Log.CloseAndFlush();
+        string baseUrl = builder.Configuration["Server:BaseUrl"] ?? "http://*:9000";
+        builder.WebHost.UseUrls(baseUrl);
+
+        var app = builder.Build();
+
+        app.MapHub<ChatHub>("/hub");
+        app.MapGet("/health", () => Results.Text("Healthy", "text/plain"));
+        app.MapGet("/", () => "SecureChat Server is Running");
+
+        Log.Information("=== SecureChat Server запуск на {Machine} ===", Environment.MachineName);
+        app.Services.GetRequiredService<Database>().Initialize();
+
+        try
+        {
+            await app.RunAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Fatal(ex, "Фатальная ошибка при запуске сервера");
+            throw;
+        }
+        finally
+        {
+            Log.CloseAndFlush();
+        }
+    }
 }

@@ -31,26 +31,22 @@ public class FileTransferManager
         string transferId = Guid.NewGuid().ToString();
         var msgId = Guid.NewGuid().ToString();
 
-        await _network.SendAsync(new
+        await _network.SendMessageAsync(new SendMessagePayload
         {
-            Type = "SendMessage",
-            Payload = new SendMessagePayload
+            ReceiverId = receiverId,
+            MessageId = msgId,
+            EncryptedKey = encKeyBase64,
+            EncryptedKeySelf = encKeySelfBase64,
+            EncryptedData = new EncryptedData
             {
-                ReceiverId = receiverId,
-                MessageId = msgId,
-                EncryptedKey = encKeyBase64,
-                EncryptedKeySelf = encKeySelfBase64,
-                EncryptedData = new EncryptedData
-                {
-                    Nonce = Convert.ToBase64String(nonce),
-                    Ciphertext = Convert.ToBase64String(ciphertext),
-                    Tag = Convert.ToBase64String(tag)
-                },
-                ContentType = "File",
-                FileName = Path.GetFileName(filePath),
-                FileSize = fileData.Length,
-                FileTransferId = transferId
-            }
+                Nonce = Convert.ToBase64String(nonce),
+                Ciphertext = Convert.ToBase64String(ciphertext),
+                Tag = Convert.ToBase64String(tag)
+            },
+            ContentType = "File",
+            FileName = Path.GetFileName(filePath),
+            FileSize = fileData.Length,
+            FileTransferId = transferId
         });
 
         sw.Stop();

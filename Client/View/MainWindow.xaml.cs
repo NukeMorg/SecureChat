@@ -113,7 +113,7 @@ public partial class MainWindow : Window
         UpdateTitleAndStatus();
         Log.Information("MainWindow открыт userId={UserId}", _clientId);
 
-        this.Loaded += async (s, e) => { await _network.SendAsync(new { Type = "GetContacts" }); };
+        this.Loaded += async (s, e) => { await _network.GetContactsAsync(); };
     }
 
     private void InitCommon()
@@ -171,8 +171,8 @@ public partial class MainWindow : Window
             _contacts.Add(newContact);
             if (!_allDialogs.ContainsKey(id)) _allDialogs[id] = new ObservableCollection<DialogMessage>();
 
-            await _network.SendAsync(new { Type = "AddContact", Payload = new AddContactPayload { ContactId = id } });
-            await _network.SendAsync(new { Type = "GetUserInfo", Payload = new GetUserInfoPayload { TargetId = id } });
+            await _network.AddContactAsync(new AddContactPayload { ContactId = id });
+            await _network.GetUserInfoAsync(new GetUserInfoPayload { TargetId = id });
 
             SearchAndAddTextBox.Clear();
             _contactsView.Filter = null;
@@ -206,7 +206,7 @@ public partial class MainWindow : Window
         _network.OnPublicKeyResponse += handler;
         try
         {
-            await _network.SendAsync(new { Type = "GetPublicKey", Payload = new GetPublicKeyPayload { TargetId = contactId } });
+            await _network.GetPublicKeyAsync(new GetPublicKeyPayload { TargetId = contactId });
             var completed = await Task.WhenAny(tcs.Task, Task.Delay(5000));
             if (completed != tcs.Task) return null;
             var key = await tcs.Task;
@@ -237,8 +237,8 @@ public partial class MainWindow : Window
         try
         {
             await _network.ConnectAsync(_serverAddress);
-            await _network.SendAsync(new { Type = "Hello", Payload = new HelloPayload { ClientId = _clientId, Token = _token } });
-            await _network.SendAsync(new { Type = "GetContacts" });
+            await _network.HelloAsync(new HelloPayload { ClientId = _clientId, Token = _token });
+            await _network.GetContactsAsync();
             UpdateTitleAndStatus();
             MessageBox.Show("Переподключение выполнено успешно.", "Сервер", MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -482,7 +482,7 @@ public partial class MainWindow : Window
                     Timestamp = DateTime.Now
                 });
 
-                _ = _network.SendAsync(new { Type = "Ack", Payload = new AckPayload { MessageId = msg.MessageId, Status = "Delivered" } });
+                _ = _network.AckAsync(new AckPayload { MessageId = msg.MessageId, Status = "Delivered" });
             }
             else if (msg.ContentType == "File")
             {
@@ -510,11 +510,7 @@ public partial class MainWindow : Window
                                     IsOutgoing = false,
                                     Timestamp = DateTime.Now
                                 });
-                                _ = _network.SendAsync(new
-                                {
-                                    Type = "Ack",
-                                    Payload = new AckPayload { MessageId = messageId, Status = "Delivered" }
-                                });
+                                _ = _network.AckAsync(new AckPayload { MessageId = messageId, Status = "Delivered" });
                             });
                         });
                     }
@@ -577,7 +573,7 @@ public partial class MainWindow : Window
             MessagesListBox.ItemsSource = _allDialogs[_currentContactId];
 
             if (_allDialogs[_currentContactId].Count == 0)
-                await _network.SendAsync(new { Type = "GetHistory", Payload = new GetHistoryRequestPayload { ContactId = contact.Id } });
+                await _network.GetHistoryAsync(new GetHistoryRequestPayload { ContactId = contact.Id });
         }
     }
 
@@ -615,23 +611,19 @@ public partial class MainWindow : Window
                 Timestamp = DateTime.Now
             });
 
-            await _network.SendAsync(new
+            await _network.SendMessageAsync(new SendMessagePayload
             {
-                Type = "SendMessage",
-                Payload = new SendMessagePayload
+                ReceiverId = _currentContactId,
+                MessageId = msgId,
+                EncryptedKey = Convert.ToBase64String(encKey),
+                EncryptedKeySelf = Convert.ToBase64String(encKeySelf),
+                EncryptedData = new EncryptedData
                 {
-                    ReceiverId = _currentContactId,
-                    MessageId = msgId,
-                    EncryptedKey = Convert.ToBase64String(encKey),
-                    EncryptedKeySelf = Convert.ToBase64String(encKeySelf),
-                    EncryptedData = new EncryptedData
-                    {
-                        Nonce = Convert.ToBase64String(nonce),
-                        Ciphertext = Convert.ToBase64String(ct),
-                        Tag = Convert.ToBase64String(tag)
-                    },
-                    ContentType = "Text"
-                }
+                    Nonce = Convert.ToBase64String(nonce),
+                    Ciphertext = Convert.ToBase64String(ct),
+                    Tag = Convert.ToBase64String(tag)
+                },
+                ContentType = "Text"
             });
 
             Log.Information("Message sent to userId={ReceiverId} length={Length} messageId={MessageId}",
@@ -712,7 +704,7 @@ public partial class MainWindow : Window
         {
             _userName = newName.Trim();
             UpdateTitleAndStatus();
-            await _network.SendAsync(new { Type = "UpdateProfile", Payload = new { UserName = _userName } });
+            await _network.UpdateProfileAsync(new UpdateProfilePayload { UserName = _userName });
             Log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} newName={NewName}",
                 "ProfileUpdate", _clientId, _userName);
         }

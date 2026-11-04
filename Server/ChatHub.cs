@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using SecureChat.Core;
 using Serilog;
+using ILogger = Serilog.ILogger;
 using Serilog.Context;
 using System.Diagnostics;
 

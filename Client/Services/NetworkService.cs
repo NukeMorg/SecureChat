@@ -9,9 +9,8 @@ namespace SecureChat.Client.Services;
 
 /// <summary>
 /// Транспортный слой клиента на SignalR HubConnection.
-/// Наружу выставлен прежний контракт (события + SendAsync с конвертом {Type, Payload}),
-/// поэтому окна (MainWindow/LoginWindow) не зависят от транспорта.
-/// Имена хаб-методов совпадают со старыми значениями Type.
+/// Каждый метод протокола — типизированный вызов хаб-метода; входящие события
+/// пробрасываются наружу без изменений, поэтому окна не зависят от транспорта.
 /// </summary>
 public class NetworkService
 {
@@ -40,6 +39,8 @@ public class NetworkService
     public event Action<int>? OnUserOffline;
 
     public bool IsConnected => _hub?.State == HubConnectionState.Connected;
+
+    // ---------- Подключение ----------
 
     public async Task ConnectAsync(string serverUrl)
     {
@@ -77,11 +78,61 @@ public class NetworkService
         }
     }
 
-    /// <summary>
-    /// Совместимость со старым протоколом: принимает конверт {Type, Payload}
-    /// и вызывает одноимённый хаб-метод. Позволяет окнам не знать о SignalR.
-    /// </summary>
-    public async Task SendAsync(object message)
+    public void Disconnect()
+    {
+        var hub = _hub;
+        _hub = null;
+        _lastHello = null;
+        if (hub == null) return;
+
+        bool wasActive = hub.State != HubConnectionState.Disconnected;
+        try
+        {
+            hub.Closed -= OnHubClosed;
+            hub.Reconnected -= OnHubReconnected;
+        }
+        catch { }
+
+        Log.Information("Отключение от сервера");
+        _ = Task.Run(async () => { try { await hub.DisposeAsync(); } catch { } });
+        if (wasActive) OnDisconnected?.Invoke();
+    }
+
+    // ---------- Хаб-методы: аутентификация ----------
+
+    public Task LoginAsync(LoginPayload payload) => InvokeAsync("Login", payload);
+
+    public Task SendEmailCodeAsync(SendEmailCodePayload payload) => InvokeAsync("SendEmailCode", payload);
+
+    public Task RegisterAccountAsync(RegisterAccountPayload payload) => InvokeAsync("RegisterAccount", payload);
+
+    public Task HelloAsync(HelloPayload payload)
+    {
+        _lastHello = payload;
+        return InvokeAsync("Hello", payload);
+    }
+
+    // ---------- Хаб-методы: чаты и контакты ----------
+
+    public Task SendMessageAsync(SendMessagePayload payload) => InvokeAsync("SendMessage", payload);
+
+    public Task AckAsync(AckPayload payload) => InvokeAsync("Ack", payload);
+
+    public Task GetHistoryAsync(GetHistoryRequestPayload payload) => InvokeAsync("GetHistory", payload);
+
+    public Task GetContactsAsync() => InvokeAsync("GetContacts");
+
+    public Task GetPublicKeyAsync(GetPublicKeyPayload payload) => InvokeAsync("GetPublicKey", payload);
+
+    public Task GetUserInfoAsync(GetUserInfoPayload payload) => InvokeAsync("GetUserInfo", payload);
+
+    public Task AddContactAsync(AddContactPayload payload) => InvokeAsync("AddContact", payload);
+
+    public Task UpdateProfileAsync(UpdateProfilePayload payload) => InvokeAsync("UpdateProfile", payload);
+
+    // ---------- Внутреннее ----------
+
+    private async Task InvokeAsync(string methodName, object? payload = null)
     {
         var hub = _hub;
         if (hub == null || hub.State != HubConnectionState.Connected)
@@ -93,22 +144,14 @@ public class NetworkService
         await _sendLock.WaitAsync();
         try
         {
-            if (message == null) return;
-            Type msgType = message.GetType();
-            string? name = msgType.GetProperty("Type")?.GetValue(message) as string;
-            if (string.IsNullOrEmpty(name)) return;
-            object? payload = msgType.GetProperty("Payload")?.GetValue(message);
-
-            if (payload != null)
-                await hub.InvokeAsync(name, payload);
+            if (payload == null)
+                await hub.InvokeAsync(methodName);
             else
-                await hub.InvokeAsync(name);
-
-            if (name == "Hello" && payload is HelloPayload hello) _lastHello = hello;
+                await hub.InvokeAsync(methodName, payload);
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Ошибка отправки сообщения");
+            Log.Error(ex, "Ошибка отправки {Method}", methodName);
             OnError?.Invoke($"Ошибка отправки: {ex.Message}");
         }
         finally
@@ -172,25 +215,5 @@ public class NetworkService
             !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             url = "http://" + url;
         return url.TrimEnd('/') + "/hub";
-    }
-
-    public void Disconnect()
-    {
-        var hub = _hub;
-        _hub = null;
-        _lastHello = null;
-        if (hub == null) return;
-
-        bool wasActive = hub.State != HubConnectionState.Disconnected;
-        try
-        {
-            hub.Closed -= OnHubClosed;
-            hub.Reconnected -= OnHubReconnected;
-        }
-        catch { }
-
-        Log.Information("Отключение от сервера");
-        _ = Task.Run(async () => { try { await hub.DisposeAsync(); } catch { } });
-        if (wasActive) OnDisconnected?.Invoke();
     }
 }
