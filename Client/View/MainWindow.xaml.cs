@@ -583,6 +583,12 @@ public partial class MainWindow : Window
         if (_currentContactId <= 0) { MessageBox.Show("Выберите получателя", "Информация", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         string text = MessageTextBox.Text.Trim();
         if (string.IsNullOrEmpty(text)) return;
+        if (text.Length > 4000)
+        {
+            MessageBox.Show("Сообщение слишком длинное: максимум 4000 символов.",
+                "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
 
         try
         {
