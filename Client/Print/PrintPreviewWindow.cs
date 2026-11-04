@@ -1,6 +1,11 @@
 using System.Windows;
 using System.Windows.Controls;
+using Button = System.Windows.Controls.Button;
+using PrintDialog = System.Windows.Controls.PrintDialog;
+using Size = System.Windows.Size;
 using System.Windows.Documents;
+using System.Printing;
+using System.Windows.Xps;
 
 namespace SecureChat.Client.Print;
 
@@ -48,6 +53,16 @@ public class PrintPreviewWindow : Window
         {
             PageSize = new Size(dlg.PrintableAreaWidth, dlg.PrintableAreaHeight)
         };
-        dlg.PrintDocument(paginator, $"SecureChat — {_title}");
+
+        // Отправка на печать через XpsDocumentWriter (WPF)
+        PrintQueue? queue = dlg.PrintQueue;
+        var writer = queue != null
+            ? PrintQueue.CreateXpsDocumentWriter(queue)
+            : PrintQueue.CreateXpsDocumentWriter(queue)!;
+
+        if (dlg.PrintTicket != null)
+            writer.Write(paginator, dlg.PrintTicket);
+        else
+            writer.Write(paginator);
     }
 }

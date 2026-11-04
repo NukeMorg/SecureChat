@@ -2,6 +2,12 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Media;
+using FlowDirection = System.Windows.FlowDirection;
+using FontFamily = System.Windows.Media.FontFamily;
+using Brush = System.Windows.Media.Brush;
+using Brushes = System.Windows.Media.Brushes;
+using Color = System.Windows.Media.Color;
+using Point = System.Windows.Point;
 using SecureChat.Core;
 
 namespace SecureChat.Client.Print;
