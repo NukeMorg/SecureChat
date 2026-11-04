@@ -26,6 +26,7 @@ builder.WebHost.UseUrls(baseUrl);
 var app = builder.Build();
 
 app.MapHub<ChatHub>("/hub");
+app.MapGet("/health", () => Results.Text("Healthy", "text/plain"));
 app.MapGet("/", () => "SecureChat Server is Running");
 
 Log.Information("=== SecureChat Server запуск на {Machine} ===", Environment.MachineName);
