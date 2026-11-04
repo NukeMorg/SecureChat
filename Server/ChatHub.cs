@@ -5,6 +5,7 @@ using Serilog;
 using ILogger = Serilog.ILogger;
 using Serilog.Context;
 using System.Diagnostics;
+using System.Globalization;
 
 namespace SecureChat.Server;
 
@@ -638,7 +639,8 @@ public class ChatHub : Hub
 
         _db.SaveChannelMessage(p.MessageId, p.ChannelId, senderId,
             p.EncryptedData.Nonce, p.EncryptedData.Ciphertext, p.EncryptedData.Tag,
-            p.ContentType, p.FileName, p.FileSize, p.FileTransferId, p.ChainIteration);
+            p.ContentType, p.FileName, p.FileSize, p.FileTransferId, p.ChainIteration,
+            p.ReplyToMessageId);
 
         await Clients.OthersInGroup(p.ChannelId).SendAsync("IncomingChannelMessage",
             new IncomingChannelMessagePayload
@@ -651,7 +653,8 @@ public class ChatHub : Hub
                 ContentType = p.ContentType,
                 FileName = p.FileName,
                 FileSize = p.FileSize,
-                Timestamp = DateTime.UtcNow.ToString("o")
+                Timestamp = DateTime.UtcNow.ToString("o"),
+                ReplyToMessageId = p.ReplyToMessageId
             });
 
         _log.Information("Channel message channelId={ChannelId} senderId={SenderId} type={ContentType} size={Size}B messageId={MessageId}",
@@ -704,7 +707,8 @@ public class ChatHub : Hub
 
             _db.SaveMessage(p.MessageId, senderId.Value, p.ReceiverId, p.EncryptedKey,
                 p.EncryptedData?.Nonce, p.EncryptedData?.Ciphertext, p.EncryptedData?.Tag,
-                p.ContentType, p.FileName, p.FileSize, p.FileTransferId, "Sent", p.EncryptedKeySelf);
+                p.ContentType, p.FileName, p.FileSize, p.FileTransferId, "Sent", p.EncryptedKeySelf,
+                p.ReplyToMessageId);
             _db.AddContact(senderId.Value, p.ReceiverId);
 
             var receiverConns = _registry.GetConnections(p.ReceiverId);
@@ -720,7 +724,8 @@ public class ChatHub : Hub
                     ContentType = p.ContentType,
                     FileName = p.FileName,
                     FileSize = p.FileSize,
-                    FileTransferId = p.FileTransferId
+                    FileTransferId = p.FileTransferId,
+                    ReplyToMessageId = p.ReplyToMessageId
                 });
                 await Respond("DeliveryStatus", new DeliveryStatusPayload { MessageId = p.MessageId, Status = "Sent" });
             }
@@ -738,27 +743,111 @@ public class ChatHub : Hub
 
     public async Task Ack(AckPayload? p)
     {
-        if (UserId == null || p == null || p.Status != "Delivered") return;
+        if (UserId == null || p == null) return;
+        // Delivered — при получении, Read — при открытии чата (требование 1.2.5)
+        if (p.Status != "Delivered" && p.Status != "Read") return;
 
-        _db.UpdateMessageStatus(p.MessageId, "Delivered");
+        _db.UpdateMessageStatus(p.MessageId, p.Status);
         var senderId = _db.GetSenderByMessageId(p.MessageId);
         if (senderId.HasValue)
         {
             var conns = _registry.GetConnections(senderId.Value);
             if (conns.Count > 0)
                 await Clients.Clients(conns).SendAsync("DeliveryStatus",
-                    new DeliveryStatusPayload { MessageId = p.MessageId, Status = "Delivered" });
+                    new DeliveryStatusPayload { MessageId = p.MessageId, Status = p.Status });
         }
-        _log.Debug("Ack Delivered messageId={MessageId}", p.MessageId);
+        _log.Debug("Ack {Status} messageId={MessageId}", p.Status, p.MessageId);
     }
 
-    public async Task GetHistory(GetHistoryRequestPayload? p)
+    public Task<HistoryResponsePayload?> GetHistory(GetHistoryRequestPayload? p)
     {
-        int? userId = UserId;
-        if (userId == null || p == null || p.ContactId <= 0) return;
-        var messages = _db.GetHistory(userId.Value, p.ContactId);
-        _log.Debug("GetHistory userId={UserId} contactId={ContactId} count={Count}", userId.Value, p.ContactId, messages.Count);
-        await Respond("HistoryResponse", new HistoryResponsePayload { ContactId = p.ContactId, Messages = messages });
+        if (UserId is not int uid || p == null || p.ContactId <= 0)
+            return Task.FromResult<HistoryResponsePayload?>(null);
+
+        int limit = p.Limit is > 0 and <= 50 ? p.Limit : 50;
+        var (messages, hasMore) = _db.GetHistoryPage(uid, p.ContactId, p.BeforeTimestamp, limit);
+        return Task.FromResult<HistoryResponsePayload?>(new HistoryResponsePayload
+        {
+            ContactId = p.ContactId,
+            Messages = messages,
+            HasMore = hasMore
+        });
+    }
+
+    // ---------- Редактирование и удаление (Фаза D, требование 1.2.2) ----------
+
+    public async Task<SimpleStatusPayload> EditMessage(EditMessagePayload? p)
+    {
+        if (UserId is not int uid || p == null || string.IsNullOrEmpty(p.MessageId))
+            return new SimpleStatusPayload { Status = "Error" };
+
+        var info = _db.GetMessageInfo(p.MessageId);
+        if (info == null || info.Value.senderId != uid) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (info.Value.channelId != null)
+            return new SimpleStatusPayload { Status = "NotSupported" }; // ratchet каналов не позволяет перешифровать старую итерацию
+
+        // окно редактирования 15 минут
+        var timestamp = DateTime.Parse(info.Value.timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        if (DateTime.UtcNow - timestamp > TimeSpan.FromMinutes(15))
+        {
+            WriteAudit(uid, "EditMessage", info.Value.receiverId, "EditWindowExpired");
+            return new SimpleStatusPayload { Status = "EditWindowExpired" };
+        }
+        if (string.IsNullOrEmpty(p.Ciphertext) || string.IsNullOrEmpty(p.Nonce) || string.IsNullOrEmpty(p.Tag))
+            return new SimpleStatusPayload { Status = "Error" };
+
+        _db.UpdateMessageContent(p.MessageId, p.Nonce, p.Ciphertext, p.Tag);
+
+        var receiverConns = _registry.GetConnections(info.Value.receiverId);
+        if (receiverConns.Count > 0)
+        {
+            await Clients.Clients(receiverConns).SendAsync("MessageEdited", new MessageEditedPayload
+            {
+                MessageId = p.MessageId,
+                Nonce = p.Nonce,
+                Ciphertext = p.Ciphertext,
+                Tag = p.Tag
+            });
+        }
+
+        _log.Information("Message edited messageId={MessageId} userId={UserId}", p.MessageId, uid);
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
+    public async Task<SimpleStatusPayload> DeleteMessage(DeleteMessagePayload? p)
+    {
+        if (UserId is not int uid || p == null || string.IsNullOrEmpty(p.MessageId))
+            return new SimpleStatusPayload { Status = "Error" };
+
+        var info = _db.GetMessageInfo(p.MessageId);
+        if (info == null) return new SimpleStatusPayload { Status = "NotFound" };
+
+        bool isAuthor = info.Value.senderId == uid;
+        bool isAdmin = IsAdmin();
+        if (!isAuthor && !isAdmin) return new SimpleStatusPayload { Status = "Forbidden" };
+
+        _db.SoftDeleteMessage(p.MessageId);
+        WriteAudit(uid, "DeleteMessage", info.Value.senderId, "Ok");
+        _log.ForContext("Audit", true).Information(
+            "AUDIT {Action} userId={UserId} messageId={MessageId} authorId={AuthorId} byAdmin={ByAdmin}",
+            "DeleteMessage", uid, p.MessageId, info.Value.senderId, !isAuthor);
+
+        if (info.Value.channelId != null)
+        {
+            await Clients.Group(info.Value.channelId).SendAsync("MessageDeleted",
+                new MessageDeletedPayload { MessageId = p.MessageId });
+        }
+        else
+        {
+            var targets = new List<string>();
+            targets.AddRange(_registry.GetConnections(info.Value.receiverId));
+            if (!isAuthor) targets.AddRange(_registry.GetConnections(info.Value.senderId));
+            if (targets.Count > 0)
+                await Clients.Clients(targets.Distinct()).SendAsync("MessageDeleted",
+                    new MessageDeletedPayload { MessageId = p.MessageId });
+        }
+
+        return new SimpleStatusPayload { Status = "Ok" };
     }
 
     // ---------- Профиль и контакты ----------

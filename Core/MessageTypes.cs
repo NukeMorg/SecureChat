@@ -158,6 +158,7 @@ public class SendMessagePayload
     [JsonPropertyName("FileName")] public string? FileName { get; set; }
     [JsonPropertyName("FileSize")] public long FileSize { get; set; }
     [JsonPropertyName("FileTransferId")] public string? FileTransferId { get; set; }
+    [JsonPropertyName("ReplyToMessageId")] public string? ReplyToMessageId { get; set; }
 }
 
 /// <summary>
@@ -173,6 +174,7 @@ public class IncomingMessagePayload
     [JsonPropertyName("FileName")] public string? FileName { get; set; }
     [JsonPropertyName("FileSize")] public long FileSize { get; set; }
     [JsonPropertyName("FileTransferId")] public string? FileTransferId { get; set; }
+    [JsonPropertyName("ReplyToMessageId")] public string? ReplyToMessageId { get; set; }
 }
 
 /// <summary>
@@ -254,11 +256,13 @@ public class UserProfileUpdatedPayload
 }
 
 /// <summary>
-/// Запрос истории переписки с контактом.
+/// Запрос истории переписки с контактом: курсорная пагинация (до 50 сообщений старее BeforeTimestamp).
 /// </summary>
 public class GetHistoryRequestPayload
 {
     [JsonPropertyName("ContactId")] public int ContactId { get; set; }
+    [JsonPropertyName("BeforeTimestamp")] public string? BeforeTimestamp { get; set; }
+    [JsonPropertyName("Limit")] public int Limit { get; set; } = 50;
 }
 
 /// <summary>
@@ -280,15 +284,19 @@ public class HistoryMessage
     [JsonPropertyName("FileTransferId")] public string? FileTransferId { get; set; }
     [JsonPropertyName("Timestamp")] public string Timestamp { get; set; } = "";
     [JsonPropertyName("Status")] public string Status { get; set; } = "";
+    [JsonPropertyName("ReplyToMessageId")] public string? ReplyToMessageId { get; set; }
+    [JsonPropertyName("IsEdited")] public bool IsEdited { get; set; }
+    [JsonPropertyName("IsDeleted")] public bool IsDeleted { get; set; }
 }
 
 /// <summary>
-/// Ответ с историей сообщений.
+/// Ответ с историей сообщений (отсортирована по возрастанию времени).
 /// </summary>
 public class HistoryResponsePayload
 {
     [JsonPropertyName("ContactId")] public int ContactId { get; set; }
     [JsonPropertyName("Messages")] public List<HistoryMessage> Messages { get; set; } = new();
+    [JsonPropertyName("HasMore")] public bool HasMore { get; set; }
 }
 
 /// <summary>
@@ -297,6 +305,41 @@ public class HistoryResponsePayload
 public class SimpleStatusPayload
 {
     [JsonPropertyName("Status")] public string Status { get; set; } = "";
+}
+
+/// <summary>
+/// Редактирование сообщения (только автор, окно 15 минут): новый шифртекст AES-GCM.
+/// Поддерживается только для Direct-чатов (в каналах ratchet не позволяет перешифровать старую итерацию).
+/// </summary>
+public class EditMessagePayload
+{
+    [JsonPropertyName("MessageId")] public string MessageId { get; set; } = "";
+    [JsonPropertyName("Nonce")] public string Nonce { get; set; } = "";
+    [JsonPropertyName("Ciphertext")] public string Ciphertext { get; set; } = "";
+    [JsonPropertyName("Tag")] public string Tag { get; set; } = "";
+}
+
+/// <summary>
+/// Удаление сообщения: автор — своё, Admin — любое (с аудитом). Soft-delete.
+/// </summary>
+public class DeleteMessagePayload
+{
+    [JsonPropertyName("MessageId")] public string MessageId { get; set; } = "";
+}
+
+/// <summary>Событие: сообщение отредактировано (новый шифртекст для расшифровки).</summary>
+public class MessageEditedPayload
+{
+    [JsonPropertyName("MessageId")] public string MessageId { get; set; } = "";
+    [JsonPropertyName("Nonce")] public string Nonce { get; set; } = "";
+    [JsonPropertyName("Ciphertext")] public string Ciphertext { get; set; } = "";
+    [JsonPropertyName("Tag")] public string Tag { get; set; } = "";
+}
+
+/// <summary>Событие: сообщение удалено (soft-delete).</summary>
+public class MessageDeletedPayload
+{
+    [JsonPropertyName("MessageId")] public string MessageId { get; set; } = "";
 }
 
 /// <summary>

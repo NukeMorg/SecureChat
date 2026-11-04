@@ -28,6 +28,8 @@ public partial class MainWindow : Window
         "Сменить тему", nameof(ToggleThemeCommand), typeof(MainWindow));
     public static readonly RoutedUICommand ChangeNameCommand = new(
         "Изменить имя", nameof(ChangeNameCommand), typeof(MainWindow));
+    public static readonly RoutedUICommand SearchMessagesCommand = new(
+        "Поиск по сообщениям", nameof(SearchMessagesCommand), typeof(MainWindow));
 
     private static readonly ILogger Log = Serilog.Log.ForContext<MainWindow>();
 
@@ -40,6 +42,10 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, ObservableCollection<DialogMessage>> _allChannelMessages = new();
     private readonly Dictionary<string, Dictionary<int, string>> _channelMemberNames = new();
     private readonly HashSet<string> _loadedChannelIds = new();
+    private readonly Dictionary<int, bool> _directHasMore = new();
+    private readonly Dictionary<int, string> _oldestDirectTimestamp = new();
+    private readonly Dictionary<string, bool> _channelHasMore = new();
+    private readonly Dictionary<string, string> _oldestChannelTimestamp = new();
     private ChannelItem? _currentChannel;
 
     private NetworkService _network;
@@ -57,6 +63,12 @@ public partial class MainWindow : Window
 
     private int _currentContactId = -1;
     private Dictionary<int, string> _contactPublicKeys = new();
+
+    // Reply (Фаза D): цель ответа — применяется к текущему диалогу/каналу
+    private string? _replyToMessageId;
+
+    // Edit (Фаза D): редактируемое сообщение (только Direct, окно 15 минут на сервере)
+    private string? _editingMessageId;
 
     public MainWindow()
     {
@@ -104,9 +116,10 @@ public partial class MainWindow : Window
         _network.OnChannelMemberAdded += p => Dispatcher.Invoke(() => _ = RefreshChannelsAsync());
         _network.OnChannelMemberRemoved += p => Dispatcher.Invoke(() => _ = OnChannelMemberRemovedAsync(p));
         _network.OnIncomingChannelMessage += OnIncomingChannelMessage;
+        _network.OnMessageEdited += OnMessageEdited;
+        _network.OnMessageDeleted += OnMessageDeleted;
         _network.OnUserProfileUpdated += OnUserProfileUpdated;
         _network.OnUserInfoResponse += OnUserInfoResponse;
-        _network.OnHistoryResponse += OnHistoryResponse;
         _network.OnContactList += OnContactList;
         _network.OnAddContactResponse += OnAddContactResponse;
 
@@ -147,6 +160,7 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(ExitCommand, (s, e) => Application.Current.Shutdown()));
         CommandBindings.Add(new CommandBinding(ToggleThemeCommand, (s, e) => ToggleTheme_Click(s, e)));
         CommandBindings.Add(new CommandBinding(ChangeNameCommand, (s, e) => ChangeName_Click(s, e)));
+        CommandBindings.Add(new CommandBinding(SearchMessagesCommand, (s, e) => OpenSearch_Click(s, e)));
         _contactsView = CollectionViewSource.GetDefaultView(_contacts);
         ContactsListBox.ItemsSource = _contactsView;
     }
@@ -425,6 +439,8 @@ public partial class MainWindow : Window
         "InvalidRole" => "Недопустимая роль.",
         "WrongPassword" => "Текущий пароль неверен.",
         "WeakPassword" => "Пароль: минимум 8 символов, хотя бы одна буква и одна цифра.",
+        "EditWindowExpired" => "Срок редактирования истёк (15 минут).",
+        "NotSupported" => "Редактирование доступно только в личных чатах.",
         "NotConnected" => "Нет подключения к серверу.",
         _ => "ошибка сервера."
     };
@@ -716,6 +732,7 @@ public partial class MainWindow : Window
         if (ChannelsListBox.SelectedItem is not ChannelItem channel) return;
         _currentChannel = channel;
         _currentContactId = -1;
+        channel.UnreadCount = 0;
 
         if (!_allChannelMessages.ContainsKey(channel.Id))
             _allChannelMessages[channel.Id] = new ObservableCollection<DialogMessage>();
@@ -742,10 +759,20 @@ public partial class MainWindow : Window
     {
         if (_loadedChannelIds.Contains(channelId)) return;
         _loadedChannelIds.Add(channelId);
+        await LoadChannelHistoryPageAsync(channelId, loadMore: false);
+    }
 
+    /// <summary>Страница истории канала; loadMore — «Загрузить ещё» (prepend старых сообщений).</summary>
+    private async Task LoadChannelHistoryPageAsync(string channelId, bool loadMore)
+    {
+        string? before = loadMore && _oldestChannelTimestamp.TryGetValue(channelId, out var t) ? t : null;
         var resp = await _network.GetChannelHistoryAsync(new GetChannelHistoryPayload
-        { ChannelId = channelId, Limit = 50 });
+        { ChannelId = channelId, BeforeTimestamp = before, Limit = 50 });
         if (resp == null) return;
+
+        _channelHasMore[channelId] = resp.HasMore;
+        if (resp.Messages.Count > 0)
+            _oldestChannelTimestamp[channelId] = resp.Messages[0].Timestamp;
 
         var messages = resp.Messages;
         messages.Reverse(); // сервер отдаёт по убыванию времени; расшифровка — по возрастанию
@@ -765,7 +792,7 @@ public partial class MainWindow : Window
                     IsOutgoing = m.SenderId == _clientId,
                     SenderName = m.SenderId == _clientId ? "" : GetChannelMemberName(channelId, m.SenderId),
                     Timestamp = DateTime.Parse(m.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
-                });
+                }, prepend: loadMore);
                 continue;
             }
             if (m.ContentType != "Text" || string.IsNullOrEmpty(m.Ciphertext)) continue;
@@ -792,7 +819,7 @@ public partial class MainWindow : Window
                     IsOutgoing = m.SenderId == _clientId,
                     SenderName = m.SenderId == _clientId ? "" : GetChannelMemberName(channelId, m.SenderId),
                     Timestamp = DateTime.Parse(m.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
-                });
+                }, prepend: loadMore);
             }
             catch (Exception ex)
             {
@@ -801,12 +828,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private void AddChannelMessage(string channelId, DialogMessage msg)
+    private void AddChannelMessage(string channelId, DialogMessage msg, bool prepend = false)
     {
         if (!_allChannelMessages.ContainsKey(channelId))
             _allChannelMessages[channelId] = new ObservableCollection<DialogMessage>();
         if (_allChannelMessages[channelId].Any(m => m.Id == msg.Id)) return;
-        _allChannelMessages[channelId].Add(msg);
+        if (prepend) _allChannelMessages[channelId].Insert(0, msg);
+        else _allChannelMessages[channelId].Add(msg);
         if (_currentChannel?.Id == channelId)
             MessagesListBox.ItemsSource = _allChannelMessages[channelId];
     }
@@ -836,7 +864,7 @@ public partial class MainWindow : Window
                     Convert.FromBase64String(msg.EncryptedData.Ciphertext),
                     Convert.FromBase64String(msg.EncryptedData.Tag));
 
-                AddChannelMessage(msg.ChannelId, new DialogMessage
+                var dm = new DialogMessage
                 {
                     Id = msg.MessageId,
                     SenderId = msg.SenderId,
@@ -845,8 +873,24 @@ public partial class MainWindow : Window
                     Status = "",
                     IsOutgoing = msg.SenderId == _clientId,
                     SenderName = msg.SenderId == _clientId ? "" : GetChannelMemberName(msg.ChannelId, msg.SenderId),
-                    Timestamp = DateTime.Parse(msg.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
-                });
+                    Timestamp = DateTime.Parse(msg.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    ReplyToMessageId = msg.ReplyToMessageId
+                };
+                if (_allChannelMessages.TryGetValue(msg.ChannelId, out var chanCol))
+                    ApplyReplyPreview(dm, chanCol);
+
+                // упоминание @ник (требование 1.2.4): подсветка в имени отправителя
+                if (dm.Text.Contains("@" + _userName, StringComparison.OrdinalIgnoreCase))
+                    dm.SenderName = "🔔 " + (dm.SenderName == "" ? _userName : dm.SenderName);
+
+                AddChannelMessage(msg.ChannelId, dm);
+
+                // счётчик непрочитанных канала
+                if (_currentChannel?.Id != msg.ChannelId || ListModeComboBox.SelectedIndex != 1)
+                {
+                    var channelItem = _channels.FirstOrDefault(c => c.Id == msg.ChannelId);
+                    if (channelItem != null) channelItem.UnreadCount++;
+                }
             }
             catch (Exception ex)
             {
@@ -872,7 +916,7 @@ public partial class MainWindow : Window
         var (ct, nonce, tag) = _crypto.AesGcmEncrypt(messageKey, plain);
         string msgId = Guid.NewGuid().ToString();
 
-        AddChannelMessage(channelId, new DialogMessage
+        var outgoing = new DialogMessage
         {
             Id = msgId,
             SenderId = _clientId,
@@ -880,8 +924,12 @@ public partial class MainWindow : Window
             ContentType = "Text",
             Status = "",
             IsOutgoing = true,
-            Timestamp = DateTime.Now
-        });
+            Timestamp = DateTime.Now,
+            ReplyToMessageId = _replyToMessageId
+        };
+        if (_allChannelMessages.TryGetValue(channelId, out var replyCol))
+            ApplyReplyPreview(outgoing, replyCol);
+        AddChannelMessage(channelId, outgoing);
 
         await _network.SendChannelMessageAsync(new SendChannelMessagePayload
         {
@@ -894,11 +942,15 @@ public partial class MainWindow : Window
                 Ciphertext = Convert.ToBase64String(ct),
                 Tag = Convert.ToBase64String(tag)
             },
-            ContentType = "Text"
+            ContentType = "Text",
+            ReplyToMessageId = _replyToMessageId
         });
 
         Log.Information("Channel message sent channelId={ChannelId} length={Length} iteration={Iteration} messageId={MessageId}",
             channelId, text.Length, iteration, msgId);
+
+        MessageTextBox.Clear();
+        ClearReply();
     }
 
     /// <summary>Отправка файла в канал: ≤10 МБ, шифрование MessageKey из ratchet.</summary>
@@ -1011,6 +1063,280 @@ public partial class MainWindow : Window
         }
     }
 
+    // ---------- Reply (Фаза D) ----------
+
+    /// <summary>Цитата строится локально: сервер не видит plaintext (E2E).</summary>
+    private void ApplyReplyPreview(DialogMessage dm, IEnumerable<DialogMessage> collection)
+    {
+        if (string.IsNullOrEmpty(dm.ReplyToMessageId)) return;
+        var original = collection.FirstOrDefault(m => m.Id == dm.ReplyToMessageId);
+        if (original == null)
+        {
+            dm.ReplyPreview = "↩ ответ на сообщение";
+            return;
+        }
+        string author = original.IsOutgoing ? _userName : ResolveSenderName(original);
+        string text = original.ContentType == "Text" ? original.Text : (original.FilePath ?? "файл");
+        if (text.Length > 100) text = text[..100] + "…";
+        dm.ReplyPreview = $"↩ {author}: {text}";
+    }
+
+    private string ResolveSenderName(DialogMessage msg)
+    {
+        if (ListModeComboBox.SelectedIndex == 1 && _currentChannel != null)
+            return GetChannelMemberName(_currentChannel.Id, msg.SenderId);
+        var contact = _contacts.FirstOrDefault(c => c.Id == msg.SenderId);
+        return contact != null ? contact.RawName : $"User {msg.SenderId}";
+    }
+
+    private void StartReply(DialogMessage msg)
+    {
+        _replyToMessageId = msg.Id;
+        string author = msg.IsOutgoing ? _userName : ResolveSenderName(msg);
+        string preview = msg.ContentType == "Text" ? msg.Text : (msg.FilePath ?? "файл");
+        if (preview.Length > 100) preview = preview[..100] + "…";
+        ReplyBarText.Text = $"Ответ на: {author}: {preview}";
+        ReplyBar.Visibility = Visibility.Visible;
+        MessageTextBox.Focus();
+    }
+
+    private void ReplyToMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Parent is ContextMenu cm &&
+            cm.PlacementTarget is ListBoxItem item && item.DataContext is DialogMessage msg)
+            StartReply(msg);
+    }
+
+    private void CancelReply_Click(object sender, RoutedEventArgs e)
+    {
+        if (_editingMessageId != null)
+        {
+            _editingMessageId = null;
+            MessageTextBox.Clear();
+        }
+        ClearReply();
+    }
+
+    private void ClearReply()
+    {
+        _replyToMessageId = null;
+        ReplyBar.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>Редактирование: новый шифртекст тем же сессионным ключом (сервер проверяет окно 15 минут).</summary>
+    private async Task EditCurrentMessageAsync(string newText)
+    {
+        if (_currentContactId <= 0 || _editingMessageId == null) return;
+
+        byte[]? sessionKey = _dialogManager.GetSessionKey(_currentContactId);
+        if (sessionKey == null)
+        {
+            MessageBox.Show("Сессионный ключ диалога недоступен.", "Ошибка",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            _editingMessageId = null;
+            ClearReply();
+            return;
+        }
+
+        var (ct, nonce, tag) = _crypto.AesGcmEncrypt(sessionKey, Encoding.UTF8.GetBytes(newText));
+        var resp = await _network.EditMessageAsync(new EditMessagePayload
+        {
+            MessageId = _editingMessageId,
+            Nonce = Convert.ToBase64String(nonce),
+            Ciphertext = Convert.ToBase64String(ct),
+            Tag = Convert.ToBase64String(tag)
+        });
+
+        if (resp?.Status == "Ok")
+        {
+            if (_allDialogs.TryGetValue(_currentContactId, out var dialog))
+            {
+                var msg = dialog.FirstOrDefault(m => m.Id == _editingMessageId);
+                if (msg != null)
+                {
+                    msg.Text = newText;
+                    msg.IsEdited = true;
+                }
+            }
+            MessagesListBox.Items.Refresh();
+            Log.Information("Message edited messageId={MessageId}", _editingMessageId);
+        }
+        else
+        {
+            MessageBox.Show($"Не удалось изменить сообщение: {MapAdminError(resp?.Status)}",
+                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+
+        _editingMessageId = null;
+        ClearReply();
+    }
+
+    // ---------- Edit / Delete (Фаза D) ----------
+
+    private void EditMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Parent is ContextMenu cm &&
+            cm.PlacementTarget is ListBoxItem item && item.DataContext is DialogMessage msg)
+        {
+            // редактирование — только свои текстовые сообщения Direct-чатов
+            if (!msg.IsOutgoing || msg.ContentType != "Text" || ListModeComboBox.SelectedIndex == 1)
+            {
+                MessageBox.Show("Изменять можно только свои текстовые сообщения в личных чатах.",
+                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            if (DateTime.Now - msg.Timestamp > TimeSpan.FromMinutes(15))
+            {
+                MessageBox.Show("Срок редактирования истёк (15 минут).",
+                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            _editingMessageId = msg.Id;
+            _replyToMessageId = null;
+            ReplyBarText.Text = "Изменение сообщения";
+            ReplyBar.Visibility = Visibility.Visible;
+            MessageTextBox.Text = msg.Text;
+            MessageTextBox.Focus();
+        }
+    }
+
+    private async void DeleteMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Parent is ContextMenu cm &&
+            cm.PlacementTarget is ListBoxItem item && item.DataContext is DialogMessage msg)
+        {
+            if (msg.IsOutgoing || _role == "Manager" || _role == "Admin")
+            {
+                var resp = await _network.DeleteMessageAsync(new DeleteMessagePayload { MessageId = msg.Id });
+                if (resp?.Status == "Ok") MarkMessageDeletedLocally(msg.Id);
+                else MessageBox.Show($"Не удалось удалить: {MapAdminError(resp?.Status)}",
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            else
+            {
+                MessageBox.Show("Удалять можно свои сообщения.",
+                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+    }
+
+    /// <summary>Локальная пометка об удалении (у второй стороны — по событию).</summary>
+    private void MarkMessageDeletedLocally(string messageId)
+    {
+        foreach (var dialog in _allDialogs.Values)
+        {
+            var msg = dialog.FirstOrDefault(m => m.Id == messageId);
+            if (msg != null)
+            {
+                msg.Text = "Сообщение удалено";
+                msg.ContentType = "Text";
+            }
+        }
+        foreach (var dialog in _allChannelMessages.Values)
+        {
+            var msg = dialog.FirstOrDefault(m => m.Id == messageId);
+            if (msg != null)
+            {
+                msg.Text = "Сообщение удалено";
+                msg.ContentType = "Text";
+            }
+        }
+        MessagesListBox.Items.Refresh();
+    }
+
+    private void OnMessageDeleted(MessageDeletedPayload payload)
+    {
+        Dispatcher.Invoke(() => MarkMessageDeletedLocally(payload.MessageId));
+    }
+
+    private void OnMessageEdited(MessageEditedPayload payload)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            foreach (var pair in _allDialogs)
+            {
+                var msg = pair.Value.FirstOrDefault(m => m.Id == payload.MessageId);
+                if (msg == null) continue;
+
+                byte[]? sessionKey = _dialogManager.GetSessionKey(pair.Key);
+                if (sessionKey == null) return;
+                try
+                {
+                    byte[] plain = _crypto.AesGcmDecrypt(sessionKey,
+                        Convert.FromBase64String(payload.Nonce),
+                        Convert.FromBase64String(payload.Ciphertext),
+                        Convert.FromBase64String(payload.Tag));
+                    msg.Text = Encoding.UTF8.GetString(plain);
+                    msg.IsEdited = true;
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Edited message decrypt failed messageId={MessageId}", payload.MessageId);
+                }
+            }
+            MessagesListBox.Items.Refresh();
+        });
+    }
+
+    // ---------- Клиентский поиск (Фаза D, требование 1.2.3) ----------
+
+    private void OpenSearch_Click(object sender, RoutedEventArgs e)
+    {
+        var window = new SearchWindow(SearchLocalMessages, JumpToSearchResult) { Owner = this };
+        window.Show();
+    }
+
+    /// <summary>Поиск по расшифрованным сообщениям всех загруженных диалогов и каналов (до 100).</summary>
+    private List<SearchResultItem> SearchLocalMessages(string query)
+    {
+        var results = new List<SearchResultItem>();
+
+        foreach (var pair in _allDialogs)
+        {
+            var contact = _contacts.FirstOrDefault(c => c.Id == pair.Key);
+            string source = contact?.RawName ?? $"User {pair.Key}";
+            foreach (var m in pair.Value.Where(m => m.ContentType == "Text" &&
+                     m.Text.Contains(query, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (results.Count >= 100) return results;
+                results.Add(new SearchResultItem(source, false, pair.Key, "", m.Id,
+                    m.Timestamp.ToString("g"), m.Text));
+            }
+        }
+
+        foreach (var pair in _allChannelMessages)
+        {
+            var channel = _channels.FirstOrDefault(c => c.Id == pair.Key);
+            string source = "# " + (channel?.Name ?? pair.Key);
+            foreach (var m in pair.Value.Where(m => m.ContentType == "Text" &&
+                     m.Text.Contains(query, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (results.Count >= 100) return results;
+                results.Add(new SearchResultItem(source, true, 0, pair.Key, m.Id,
+                    m.Timestamp.ToString("g"), m.Text));
+            }
+        }
+
+        return results;
+    }
+
+    private void JumpToSearchResult(SearchResultItem result)
+    {
+        if (result.IsChannel)
+        {
+            ListModeComboBox.SelectedIndex = 1;
+            var channel = _channels.FirstOrDefault(c => c.Id == result.ChannelId);
+            if (channel != null) ChannelsListBox.SelectedItem = channel;
+        }
+        else
+        {
+            ListModeComboBox.SelectedIndex = 0;
+            var contact = _contacts.FirstOrDefault(c => c.Id == result.ContactId);
+            if (contact != null) ContactsListBox.SelectedItem = contact;
+        }
+    }
+
     private static string MapChannelError(string? status) => status switch
     {
         "Forbidden" => "Недостаточно прав (нужна роль HR или Admin).",
@@ -1064,16 +1390,29 @@ public partial class MainWindow : Window
         });
     }
 
-    private void OnHistoryResponse(HistoryResponsePayload history)
+    /// <summary>
+    /// Загрузка страницы Direct-истории (курсорная пагинация).
+    /// loadMore=false — первая страница при открытии диалога; true — «Загрузить ещё» (prepend).
+    /// </summary>
+    private async Task LoadDirectHistoryAsync(int contactId, bool loadMore)
     {
+        string? before = loadMore && _oldestDirectTimestamp.TryGetValue(contactId, out var t) ? t : null;
+        var resp = await _network.GetHistoryAsync(new GetHistoryRequestPayload
+        { ContactId = contactId, BeforeTimestamp = before, Limit = 50 });
+        if (resp == null) return;
+
+        _directHasMore[contactId] = resp.HasMore;
+        if (resp.Messages.Count > 0)
+            _oldestDirectTimestamp[contactId] = resp.Messages[0].Timestamp;
+
         Dispatcher.Invoke(() =>
         {
-            int contactId = history.ContactId;
             if (!_allDialogs.ContainsKey(contactId))
                 _allDialogs[contactId] = new ObservableCollection<DialogMessage>();
+            var dialog = _allDialogs[contactId];
+            var existingIds = new HashSet<string>(dialog.Select(m => m.Id));
 
-            var existingIds = new HashSet<string>(_allDialogs[contactId].Select(m => m.Id));
-            foreach (var hm in history.Messages)
+            foreach (var hm in resp.Messages)
             {
                 if (existingIds.Contains(hm.MessageId)) continue;
 
@@ -1106,46 +1445,83 @@ public partial class MainWindow : Window
 
                 if (sessionKey == null) continue;
 
+                DialogMessage dm;
                 if (hm.ContentType == "Text" && hm.Ciphertext != null && hm.Nonce != null && hm.Tag != null)
                 {
                     byte[] ct = Convert.FromBase64String(hm.Ciphertext);
                     byte[] n = Convert.FromBase64String(hm.Nonce);
                     byte[] t = Convert.FromBase64String(hm.Tag);
                     byte[] plain = _crypto.AesGcmDecrypt(sessionKey, n, ct, t);
-                    _allDialogs[contactId].Add(new DialogMessage
+                    dm = new DialogMessage
                     {
                         Id = hm.MessageId,
                         SenderId = hm.SenderId,
                         ReceiverId = hm.ReceiverId,
                         Text = Encoding.UTF8.GetString(plain),
                         ContentType = "Text",
-                        Status = hm.Status,
+                        Status = MapStatusGlyph(hm.Status),
                         IsOutgoing = hm.SenderId == _clientId,
                         Timestamp = DateTime.Parse(hm.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
-                    });
+                    };
                 }
                 else if (hm.ContentType == "File")
                 {
-                    _allDialogs[contactId].Add(new DialogMessage
+                    dm = new DialogMessage
                     {
                         Id = hm.MessageId,
                         SenderId = hm.SenderId,
                         ReceiverId = hm.ReceiverId,
                         FilePath = hm.FileName ?? "file",
                         ContentType = "File",
-                        Status = hm.Status,
+                        Status = MapStatusGlyph(hm.Status),
                         IsOutgoing = hm.SenderId == _clientId,
                         Timestamp = DateTime.Parse(hm.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
-                    });
+                    };
                 }
+                else continue;
+
+                if (hm.IsDeleted)
+                {
+                    dm.Text = "Сообщение удалено";
+                    dm.ContentType = "Text";
+                }
+                dm.IsEdited = hm.IsEdited;
+                dm.ReplyToMessageId = hm.ReplyToMessageId;
+                ApplyReplyPreview(dm, dialog);
+
+                if (loadMore) dialog.Insert(0, dm); // «ещё» — старые сообщения сверху
+                else dialog.Add(dm);
                 existingIds.Add(hm.MessageId);
             }
 
-            Log.Debug("HistoryResponse contactId={ContactId} count={Count}", contactId, history.Messages.Count);
-
             if (_currentContactId == contactId)
-                MessagesListBox.ItemsSource = _allDialogs[contactId];
+            {
+                MessagesListBox.ItemsSource = dialog;
+                UpdateLoadMoreButton();
+            }
         });
+    }
+
+    private void UpdateLoadMoreButton()
+    {
+        bool hasMore = ListModeComboBox.SelectedIndex == 1
+            ? (_currentChannel != null && _channelHasMore.TryGetValue(_currentChannel.Id, out var ch) && ch)
+            : (_currentContactId > 0 && _directHasMore.TryGetValue(_currentContactId, out var dh) && dh);
+        LoadMoreButton.Visibility = hasMore ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async void LoadMore_Click(object sender, RoutedEventArgs e)
+    {
+        if (ListModeComboBox.SelectedIndex == 1)
+        {
+            if (_currentChannel == null) return;
+            await LoadChannelHistoryPageAsync(_currentChannel.Id, loadMore: true);
+        }
+        else if (_currentContactId > 0)
+        {
+            await LoadDirectHistoryAsync(_currentContactId, loadMore: true);
+        }
+        UpdateLoadMoreButton();
     }
 
     private void OnContactList(ContactListPayload list)
@@ -1165,6 +1541,16 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>Глифы статусов доставки: Sent → Delivered → Read (требование 1.2.5).</summary>
+    private static string MapStatusGlyph(string status) => status switch
+    {
+        "Sent" => "✓",
+        "Delivered" => "✓✓",
+        "Read" => "✓✓✓",
+        "UserOffline" => "✗ офлайн",
+        _ => status
+    };
+
     private void OnDeliveryStatus(DeliveryStatusPayload status)
     {
         Dispatcher.Invoke(() =>
@@ -1173,13 +1559,7 @@ public partial class MainWindow : Window
             var msg = _allDialogs.Values.SelectMany(c => c).FirstOrDefault(m => m.Id == status.MessageId);
             if (msg != null)
             {
-                msg.Status = status.Status switch
-                {
-                    "Sent" => "✓",
-                    "Delivered" => "✓✓",
-                    "UserOffline" => "✗ офлайн",
-                    _ => status.Status
-                };
+                msg.Status = MapStatusGlyph(status.Status);
                 MessagesListBox.Items.Refresh();
             }
         });
@@ -1209,7 +1589,7 @@ public partial class MainWindow : Window
                 byte[] t = Convert.FromBase64String(msg.EncryptedData.Tag);
                 byte[] plain = _crypto.AesGcmDecrypt(sessionKey, n, ct, t);
 
-                AddMessage(msg.SenderId, new DialogMessage
+                var incoming = new DialogMessage
                 {
                     Id = msg.MessageId,
                     SenderId = msg.SenderId,
@@ -1218,8 +1598,19 @@ public partial class MainWindow : Window
                     ContentType = "Text",
                     Status = "✓✓",
                     IsOutgoing = false,
-                    Timestamp = DateTime.Now
-                });
+                    Timestamp = DateTime.Now,
+                    ReplyToMessageId = msg.ReplyToMessageId
+                };
+                if (_allDialogs.TryGetValue(msg.SenderId, out var col))
+                    ApplyReplyPreview(incoming, col);
+                AddMessage(msg.SenderId, incoming);
+
+                // счётчик непрочитанных: сообщение пришло не в открытый диалог
+                if (_currentContactId != msg.SenderId || ListModeComboBox.SelectedIndex != 0)
+                {
+                    var contact = _contacts.FirstOrDefault(c => c.Id == msg.SenderId);
+                    if (contact != null) contact.UnreadCount++;
+                }
 
                 _ = _network.AckAsync(new AckPayload { MessageId = msg.MessageId, Status = "Delivered" });
             }
@@ -1308,17 +1699,34 @@ public partial class MainWindow : Window
         {
             _currentChannel = null;
             _currentContactId = contact.Id;
+            contact.UnreadCount = 0;
             if (!_allDialogs.ContainsKey(_currentContactId))
                 _allDialogs[_currentContactId] = new ObservableCollection<DialogMessage>();
             MessagesListBox.ItemsSource = _allDialogs[_currentContactId];
 
             if (_allDialogs[_currentContactId].Count == 0)
-                await _network.GetHistoryAsync(new GetHistoryRequestPayload { ContactId = contact.Id });
+                await LoadDirectHistoryAsync(contact.Id, loadMore: false);
+
+            // Read-статусы: диалог открыт — все входящие сообщения прочитаны
+            foreach (var m in _allDialogs[_currentContactId].Where(m => !m.IsOutgoing))
+                _ = _network.AckAsync(new AckPayload { MessageId = m.Id, Status = "Read" });
+
+            UpdateLoadMoreButton();
         }
     }
 
     private async void SendButton_Click(object sender, RoutedEventArgs e)
     {
+        // режим редактирования: перешифровка текста тем же сессионным ключом
+        if (_editingMessageId != null && ListModeComboBox.SelectedIndex != 1)
+        {
+            string editText = MessageTextBox.Text.Trim();
+            if (string.IsNullOrEmpty(editText)) return;
+            await EditCurrentMessageAsync(editText);
+            MessageTextBox.Clear();
+            return;
+        }
+
         // режим «Каналы»: сообщение уходит в канал через групповой ключ
         if (ListModeComboBox.SelectedIndex == 1)
         {
@@ -1367,7 +1775,7 @@ public partial class MainWindow : Window
             var (ct, nonce, tag) = _crypto.AesGcmEncrypt(sessionKey, plain);
             var msgId = Guid.NewGuid().ToString();
 
-            AddMessage(_currentContactId, new DialogMessage
+            var outgoing = new DialogMessage
             {
                 Id = msgId,
                 SenderId = _clientId,
@@ -1376,8 +1784,12 @@ public partial class MainWindow : Window
                 ContentType = "Text",
                 Status = "Отправка...",
                 IsOutgoing = true,
-                Timestamp = DateTime.Now
-            });
+                Timestamp = DateTime.Now,
+                ReplyToMessageId = _replyToMessageId
+            };
+            if (_allDialogs.TryGetValue(_currentContactId, out var replyCol))
+                ApplyReplyPreview(outgoing, replyCol);
+            AddMessage(_currentContactId, outgoing);
 
             await _network.SendMessageAsync(new SendMessagePayload
             {
@@ -1391,13 +1803,15 @@ public partial class MainWindow : Window
                     Ciphertext = Convert.ToBase64String(ct),
                     Tag = Convert.ToBase64String(tag)
                 },
-                ContentType = "Text"
+                ContentType = "Text",
+                ReplyToMessageId = _replyToMessageId
             });
 
             Log.Information("Message sent to userId={ReceiverId} length={Length} messageId={MessageId}",
                 _currentContactId, text.Length, msgId);
 
             MessageTextBox.Clear();
+            ClearReply();
         }
         catch (Exception ex)
         {

@@ -121,6 +121,7 @@ public class SendChannelMessagePayload
     [JsonPropertyName("FileName")] public string? FileName { get; set; }
     [JsonPropertyName("FileSize")] public long FileSize { get; set; }
     [JsonPropertyName("FileTransferId")] public string? FileTransferId { get; set; }
+    [JsonPropertyName("ReplyToMessageId")] public string? ReplyToMessageId { get; set; }
 }
 
 /// <summary>Входящее сообщение канала.</summary>
@@ -135,6 +136,7 @@ public class IncomingChannelMessagePayload
     [JsonPropertyName("FileName")] public string? FileName { get; set; }
     [JsonPropertyName("FileSize")] public long FileSize { get; set; }
     [JsonPropertyName("Timestamp")] public string Timestamp { get; set; } = "";
+    [JsonPropertyName("ReplyToMessageId")] public string? ReplyToMessageId { get; set; }
 }
 
 /// <summary>Сообщение канала в истории (расшифровывается на клиенте).</summary>
@@ -151,6 +153,7 @@ public class ChannelMessageDto
     [JsonPropertyName("FileSize")] public long FileSize { get; set; }
     [JsonPropertyName("Timestamp")] public string Timestamp { get; set; } = "";
     [JsonPropertyName("IsDeleted")] public bool IsDeleted { get; set; }
+    [JsonPropertyName("ReplyToMessageId")] public string? ReplyToMessageId { get; set; }
 }
 
 /// <summary>Запрос истории канала: курсорная пагинация, до 50 сообщений старее BeforeTimestamp.</summary>

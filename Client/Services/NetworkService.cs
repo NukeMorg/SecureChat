@@ -26,7 +26,6 @@ public class NetworkService
     public event Action<PublicKeyResponsePayload>? OnPublicKeyResponse;
     public event Action<UserProfileUpdatedPayload>? OnUserProfileUpdated;
     public event Action<UserInfoResponsePayload>? OnUserInfoResponse;
-    public event Action<HistoryResponsePayload>? OnHistoryResponse;
     public event Action<ContactListPayload>? OnContactList;
     public event Action<string>? OnError;
     public event Action? OnConnected;
@@ -43,6 +42,8 @@ public class NetworkService
     public event Action<ChannelMemberAddedPayload>? OnChannelMemberAdded;
     public event Action<ChannelMemberRemovedPayload>? OnChannelMemberRemoved;
     public event Action<IncomingChannelMessagePayload>? OnIncomingChannelMessage;
+    public event Action<MessageEditedPayload>? OnMessageEdited;
+    public event Action<MessageDeletedPayload>? OnMessageDeleted;
 
     public bool IsConnected => _hub?.State == HubConnectionState.Connected;
 
@@ -124,7 +125,8 @@ public class NetworkService
 
     public Task AckAsync(AckPayload payload) => InvokeAsync("Ack", payload);
 
-    public Task GetHistoryAsync(GetHistoryRequestPayload payload) => InvokeAsync("GetHistory", payload);
+    public Task<HistoryResponsePayload?> GetHistoryAsync(GetHistoryRequestPayload payload) =>
+        InvokeWithResultAsync<HistoryResponsePayload>("GetHistory", payload);
 
     public Task GetContactsAsync() => InvokeAsync("GetContacts");
 
@@ -198,6 +200,14 @@ public class NetworkService
 
     public Task<ChannelHistoryResponsePayload?> GetChannelHistoryAsync(GetChannelHistoryPayload payload) =>
         InvokeWithResultAsync<ChannelHistoryResponsePayload>("GetChannelHistory", payload);
+
+    // ---------- Редактирование и удаление (Фаза D) ----------
+
+    public Task<SimpleStatusPayload?> EditMessageAsync(EditMessagePayload payload) =>
+        InvokeWithResultAsync("EditMessage", payload);
+
+    public Task<SimpleStatusPayload?> DeleteMessageAsync(DeleteMessagePayload payload) =>
+        InvokeWithResultAsync("DeleteMessage", payload);
 
     /// <summary>Вызов хаб-метода с ответом-статусом (Admin-операции, смена пароля).</summary>
     private Task<SimpleStatusPayload?> InvokeWithResultAsync(string methodName, object payload) =>
@@ -285,7 +295,6 @@ public class NetworkService
         hub.On<ContactListPayload>("ContactList", p => OnContactList?.Invoke(p));
         hub.On<UserProfileUpdatedPayload>("UserProfileUpdated", p => OnUserProfileUpdated?.Invoke(p));
         hub.On<UserInfoResponsePayload>("UserInfoResponse", p => OnUserInfoResponse?.Invoke(p));
-        hub.On<HistoryResponsePayload>("HistoryResponse", p => OnHistoryResponse?.Invoke(p));
         hub.On<AddContactResponsePayload>("AddContactResponse", p => OnAddContactResponse?.Invoke(p));
         hub.On<OnlineStatusPayload>("UserOnline", p => OnUserOnline?.Invoke(p.UserId));
         hub.On<OnlineStatusPayload>("UserOffline", p => OnUserOffline?.Invoke(p.UserId));
@@ -296,6 +305,8 @@ public class NetworkService
         hub.On<ChannelMemberAddedPayload>("ChannelMemberAdded", p => OnChannelMemberAdded?.Invoke(p));
         hub.On<ChannelMemberRemovedPayload>("ChannelMemberRemoved", p => OnChannelMemberRemoved?.Invoke(p));
         hub.On<IncomingChannelMessagePayload>("IncomingChannelMessage", p => OnIncomingChannelMessage?.Invoke(p));
+        hub.On<MessageEditedPayload>("MessageEdited", p => OnMessageEdited?.Invoke(p));
+        hub.On<MessageDeletedPayload>("MessageDeleted", p => OnMessageDeleted?.Invoke(p));
     }
 
     private async Task OnHubReconnected(string? connectionId)

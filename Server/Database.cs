@@ -737,7 +737,7 @@ public class Database
     public void SaveMessage(string messageId, int senderId, int receiverId,
                             string? encryptedKey, string? nonce, string? ciphertext, string? tag,
                             string contentType, string? fileName, long fileSize, string? fileTransferId,
-                            string status = "Sent", string? encryptedKeySelf = null)
+                            string status = "Sent", string? encryptedKeySelf = null, string? replyToMessageId = null)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         using var conn = new SqliteConnection(cs);
@@ -746,9 +746,9 @@ public class Database
         cmd.CommandText = @"
             INSERT INTO Messages
             (MessageId, SenderId, ReceiverId, EncryptedKey, Nonce, Ciphertext, Tag,
-             ContentType, FileName, FileSize, FileTransferId, Timestamp, Status, EncryptedKeySelf)
+             ContentType, FileName, FileSize, FileTransferId, Timestamp, Status, EncryptedKeySelf, ReplyToMessageId)
             VALUES (@msgId, @sender, @receiver, @encKey, @nonce, @ct, @tag,
-                    @ctype, @fname, @fsize, @ftransfer, @time, @status, @encKeySelf)
+                    @ctype, @fname, @fsize, @ftransfer, @time, @status, @encKeySelf, @replyTo)
             ON CONFLICT(MessageId) DO UPDATE SET
                 EncryptedKey = excluded.EncryptedKey,
                 EncryptedKeySelf = excluded.EncryptedKeySelf,
@@ -775,6 +775,7 @@ public class Database
         cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
         cmd.Parameters.AddWithValue("@status", status);
         cmd.Parameters.AddWithValue("@encKeySelf", (object?)encryptedKeySelf ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@replyTo", (object?)replyToMessageId ?? DBNull.Value);
         cmd.ExecuteNonQuery();
         sw.Stop();
         if (sw.ElapsedMilliseconds > 100)
@@ -792,6 +793,52 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>Метаданные сообщения для маршрутизации событий edit/delete.</summary>
+    public (int senderId, int receiverId, string? channelId, string timestamp)? GetMessageInfo(string messageId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT SenderId, ReceiverId, ChannelId, Timestamp FROM Messages WHERE MessageId = @id";
+        cmd.Parameters.AddWithValue("@id", messageId);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return null;
+        return (reader.GetInt32(0), reader.GetInt32(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetString(3));
+    }
+
+    /// <summary>Редактирование: новый шифртекст + маркер IsEdited (требование 1.2.2).</summary>
+    public void UpdateMessageContent(string messageId, string nonce, string ciphertext, string tag)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE Messages
+            SET Nonce = @nonce, Ciphertext = @ct, Tag = @tag,
+                IsEdited = 1, EditedAt = @time
+            WHERE MessageId = @id";
+        cmd.Parameters.AddWithValue("@nonce", nonce);
+        cmd.Parameters.AddWithValue("@ct", ciphertext);
+        cmd.Parameters.AddWithValue("@tag", tag);
+        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("@id", messageId);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Soft-delete: DeletedAt, шифртекст сохраняется (требование 1.2.2).</summary>
+    public void SoftDeleteMessage(string messageId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Messages SET DeletedAt = @time WHERE MessageId = @id";
+        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("@id", messageId);
+        cmd.ExecuteNonQuery();
+    }
+
     public int? GetSenderByMessageId(string messageId)
     {
         using var conn = new SqliteConnection(cs);
@@ -803,7 +850,12 @@ public class Database
         return result != null ? Convert.ToInt32(result) : null;
     }
 
-    public List<HistoryMessage> GetHistory(int userId1, int userId2)
+    /// <summary>
+    /// Страница истории Direct-диалога: до limit сообщений старее курсора (по убыванию времени),
+    /// признак HasMore для «Загрузить ещё».
+    /// </summary>
+    public (List<HistoryMessage> messages, bool hasMore) GetHistoryPage(
+        int user1, int user2, string? beforeTimestamp, int limit)
     {
         var list = new List<HistoryMessage>();
         using var conn = new SqliteConnection(cs);
@@ -811,16 +863,23 @@ public class Database
         var cmd = conn.CreateCommand();
         cmd.CommandText = @"
             SELECT MessageId, SenderId, ReceiverId, EncryptedKey, EncryptedKeySelf, Nonce, Ciphertext, Tag,
-                   ContentType, FileName, FileSize, FileTransferId, Timestamp, Status
+                   ContentType, FileName, FileSize, FileTransferId, Timestamp, Status,
+                   ReplyToMessageId, IsEdited, DeletedAt
             FROM Messages
-            WHERE (SenderId = @user1 AND ReceiverId = @user2)
-               OR (SenderId = @user2 AND ReceiverId = @user1)
-            ORDER BY Timestamp ASC";
-        cmd.Parameters.AddWithValue("@user1", userId1);
-        cmd.Parameters.AddWithValue("@user2", userId2);
+            WHERE ChannelId IS NULL
+              AND ((SenderId = @user1 AND ReceiverId = @user2)
+                OR (SenderId = @user2 AND ReceiverId = @user1))
+              AND (@before IS NULL OR Timestamp < @before)
+            ORDER BY Timestamp DESC
+            LIMIT @limit";
+        cmd.Parameters.AddWithValue("@user1", user1);
+        cmd.Parameters.AddWithValue("@user2", user2);
+        cmd.Parameters.AddWithValue("@before", (object?)beforeTimestamp ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@limit", limit + 1); // +1 для признака HasMore
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            if (list.Count >= limit) continue; // лишнюю строку читаем только ради HasMore
             list.Add(new HistoryMessage
             {
                 MessageId = reader.GetString(0),
@@ -836,11 +895,35 @@ public class Database
                 FileSize = reader.GetInt64(10),
                 FileTransferId = reader.IsDBNull(11) ? null : reader.GetString(11),
                 Timestamp = reader.GetString(12),
-                Status = reader.GetString(13)
+                Status = reader.GetString(13),
+                ReplyToMessageId = reader.IsDBNull(14) ? null : reader.GetString(14),
+                IsEdited = !reader.IsDBNull(15) && reader.GetInt64(15) == 1,
+                IsDeleted = !reader.IsDBNull(16)
             });
         }
-        Log.Debug("GetHistory user1={U1} user2={U2} count={Count}", userId1, userId2, list.Count);
-        return list;
+        bool hasMore = false;
+        if (list.Count > 0)
+        {
+            hasMore = HasOlderDirectMessages(conn, user1, user2, list[^1].Timestamp);
+        }
+        list.Reverse(); // клиент ожидает по возрастанию времени
+        Log.Debug("GetHistoryPage user1={U1} user2={U2} count={Count} hasMore={HasMore}",
+            user1, user2, list.Count, hasMore);
+        return (list, hasMore);
+    }
+
+    private static bool HasOlderDirectMessages(SqliteConnection conn, int user1, int user2, string oldestTimestamp)
+    {
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT COUNT(*) FROM Messages
+            WHERE ChannelId IS NULL
+              AND ((SenderId = @u1 AND ReceiverId = @u2) OR (SenderId = @u2 AND ReceiverId = @u1))
+              AND Timestamp < @t";
+        cmd.Parameters.AddWithValue("@u1", user1);
+        cmd.Parameters.AddWithValue("@u2", user2);
+        cmd.Parameters.AddWithValue("@t", oldestTimestamp);
+        return (long)cmd.ExecuteScalar()! > 0;
     }
 
     public List<HistoryMessage> GetPendingMessages(int receiverId)
@@ -1088,7 +1171,7 @@ public class Database
     public void SaveChannelMessage(string messageId, string channelId, int senderId,
         string? nonce, string? ciphertext, string? tag,
         string contentType, string? fileName, long fileSize, string? fileTransferId,
-        long chainIteration)
+        long chainIteration, string? replyToMessageId = null)
     {
         using var conn = new SqliteConnection(cs);
         conn.Open();
@@ -1096,9 +1179,9 @@ public class Database
         cmd.CommandText = @"
             INSERT INTO Messages
             (MessageId, SenderId, ReceiverId, ChannelId, Nonce, Ciphertext, Tag,
-             ContentType, FileName, FileSize, FileTransferId, ChainIteration, Timestamp, Status)
+             ContentType, FileName, FileSize, FileTransferId, ChainIteration, Timestamp, Status, ReplyToMessageId)
             VALUES (@msgId, @sender, 0, @channel, @nonce, @ct, @tag,
-                    @ctype, @fname, @fsize, @ftransfer, @iter, @time, 'Sent')
+                    @ctype, @fname, @fsize, @ftransfer, @iter, @time, 'Sent', @replyTo)
             ON CONFLICT(MessageId) DO NOTHING;";
         cmd.Parameters.AddWithValue("@msgId", messageId);
         cmd.Parameters.AddWithValue("@sender", senderId);
@@ -1112,6 +1195,7 @@ public class Database
         cmd.Parameters.AddWithValue("@ftransfer", (object?)fileTransferId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@iter", chainIteration);
         cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("@replyTo", (object?)replyToMessageId ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
 
