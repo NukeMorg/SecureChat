@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -382,7 +383,7 @@ public partial class MainWindow : Window
                         ContentType = "Text",
                         Status = hm.Status,
                         IsOutgoing = hm.SenderId == _clientId,
-                        Timestamp = DateTime.Parse(hm.Timestamp)
+                        Timestamp = DateTime.Parse(hm.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
                     });
                 }
                 else if (hm.ContentType == "File")
@@ -396,7 +397,7 @@ public partial class MainWindow : Window
                         ContentType = "File",
                         Status = hm.Status,
                         IsOutgoing = hm.SenderId == _clientId,
-                        Timestamp = DateTime.Parse(hm.Timestamp)
+                        Timestamp = DateTime.Parse(hm.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
                     });
                 }
                 existingIds.Add(hm.MessageId);

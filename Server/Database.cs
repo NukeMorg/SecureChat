@@ -1,6 +1,7 @@
 ﻿using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using SecureChat.Core;
 using SecureChat.Security;
@@ -150,7 +151,7 @@ public class Database
         if (!reader.Read()) return CodeVerifyResult.Invalid;
 
         string savedCode = reader.GetString(0);
-        DateTime expiresAt = DateTime.Parse(reader.GetString(1));
+        DateTime expiresAt = DateTime.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
 
         if (DateTime.UtcNow > expiresAt)
         {
