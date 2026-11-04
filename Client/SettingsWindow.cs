@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using Application = System.Windows.Application;
 using SecureChat.Client.Services;
 
 namespace SecureChat.Client;
