@@ -104,8 +104,12 @@ public class Database
         {
             ApplyV1(conn); // сессии: TTL/ревокация; клиенты: роль/активность/статус/аватар; AuditLog
         }
+        if (version < 2)
+        {
+            ApplyV2(conn); // каналы: Channels/ChannelMembers/ChannelKeys; сообщения: ChannelId и др.
+        }
 
-        SetUserVersion(conn, Math.Max(version, 1));
+        SetUserVersion(conn, Math.Max(version, 2));
     }
 
     /// <summary>
@@ -149,6 +153,57 @@ public class Database
                 CREATE TRIGGER IF NOT EXISTS trg_auditlog_no_delete BEFORE DELETE ON AuditLog
                 BEGIN SELECT RAISE(ABORT, 'AuditLog is append-only'); END;";
             audit.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// Миграция v2 (Фаза C): каналы с E2E-групповым ключом.
+    /// GroupKey хранится только в зашифрованном виде (RSA 1-1 каждого участника).
+    /// </summary>
+    private void ApplyV2(SqliteConnection conn)
+    {
+        using (var channels = conn.CreateCommand())
+        {
+            channels.CommandText = @"
+                CREATE TABLE IF NOT EXISTS Channels (
+                    Id TEXT PRIMARY KEY,
+                    Name TEXT NOT NULL UNIQUE,
+                    OwnerId INTEGER NOT NULL,
+                    CreatedAt TEXT NOT NULL,
+                    FOREIGN KEY (OwnerId) REFERENCES Clients(Id)
+                );
+                CREATE TABLE IF NOT EXISTS ChannelMembers (
+                    ChannelId TEXT NOT NULL,
+                    UserId INTEGER NOT NULL,
+                    Role TEXT NOT NULL DEFAULT 'Member',
+                    JoinedAt TEXT NOT NULL,
+                    PRIMARY KEY (ChannelId, UserId),
+                    FOREIGN KEY (ChannelId) REFERENCES Channels(Id),
+                    FOREIGN KEY (UserId) REFERENCES Clients(Id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_channelmembers_user ON ChannelMembers(UserId);
+                CREATE TABLE IF NOT EXISTS ChannelKeys (
+                    ChannelId TEXT NOT NULL,
+                    UserId INTEGER NOT NULL,
+                    Version INTEGER NOT NULL,
+                    EncryptedKey TEXT NOT NULL,
+                    PRIMARY KEY (ChannelId, UserId)
+                );";
+            channels.ExecuteNonQuery();
+        }
+
+        TryAddColumn(conn, "Messages", "ChannelId", "TEXT");
+        TryAddColumn(conn, "Messages", "ChainIteration", "INTEGER");
+        TryAddColumn(conn, "Messages", "ReplyToMessageId", "TEXT");
+        TryAddColumn(conn, "Messages", "IsEdited", "INTEGER NOT NULL DEFAULT 0");
+        TryAddColumn(conn, "Messages", "EditedAt", "TEXT");
+        TryAddColumn(conn, "Messages", "DeletedAt", "TEXT");
+
+        using (var idx = conn.CreateCommand())
+        {
+            idx.CommandText = @"
+                CREATE INDEX IF NOT EXISTS idx_messages_channel ON Messages(ChannelId, Timestamp);";
+            idx.ExecuteNonQuery();
         }
     }
 
@@ -842,5 +897,311 @@ public class Database
         using var reader = cmd.ExecuteReader();
         while (reader.Read()) ids.Add(reader.GetInt32(0));
         return ids;
+    }
+
+    // ---------- Каналы (Фаза C) ----------
+
+    /// <summary>Создание канала; возвращает null, если имя занято.</summary>
+    public string? CreateChannel(string name, int ownerId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO Channels (Id, Name, OwnerId, CreatedAt)
+            VALUES (@id, @name, @owner, @time);";
+        string channelId = Guid.NewGuid().ToString();
+        cmd.Parameters.AddWithValue("@id", channelId);
+        cmd.Parameters.AddWithValue("@name", name);
+        cmd.Parameters.AddWithValue("@owner", ownerId);
+        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        try
+        {
+            cmd.ExecuteNonQuery();
+        }
+        catch (SqliteException)
+        {
+            return null; // UNIQUE(Name)
+        }
+
+        var member = conn.CreateCommand();
+        member.CommandText = @"
+            INSERT INTO ChannelMembers (ChannelId, UserId, Role, JoinedAt)
+            VALUES (@id, @owner, 'Owner', @time);";
+        member.Parameters.AddWithValue("@id", channelId);
+        member.Parameters.AddWithValue("@owner", ownerId);
+        member.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        member.ExecuteNonQuery();
+
+        Log.Debug("Channel created channelId={ChannelId} ownerId={OwnerId}", channelId, ownerId);
+        return channelId;
+    }
+
+    public bool ChannelExists(string channelId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM Channels WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", channelId);
+        return (long)cmd.ExecuteScalar()! > 0;
+    }
+
+    public string? GetChannelName(string channelId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Name FROM Channels WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", channelId);
+        return cmd.ExecuteScalar() as string;
+    }
+
+    public int? GetChannelOwnerId(string channelId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT OwnerId FROM Channels WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", channelId);
+        var result = cmd.ExecuteScalar();
+        return result == null ? null : Convert.ToInt32(result);
+    }
+
+    public bool IsChannelMember(string channelId, int userId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM ChannelMembers WHERE ChannelId = @c AND UserId = @u";
+        cmd.Parameters.AddWithValue("@c", channelId);
+        cmd.Parameters.AddWithValue("@u", userId);
+        return (long)cmd.ExecuteScalar()! > 0;
+    }
+
+    public void AddChannelMemberToChannel(string channelId, int userId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            INSERT OR IGNORE INTO ChannelMembers (ChannelId, UserId, Role, JoinedAt)
+            VALUES (@c, @u, 'Member', @time)";
+        cmd.Parameters.AddWithValue("@c", channelId);
+        cmd.Parameters.AddWithValue("@u", userId);
+        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.ExecuteNonQuery();
+    }
+
+    public void RemoveChannelMemberFromChannel(string channelId, int userId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM ChannelMembers WHERE ChannelId = @c AND UserId = @u";
+        cmd.Parameters.AddWithValue("@c", channelId);
+        cmd.Parameters.AddWithValue("@u", userId);
+        cmd.ExecuteNonQuery();
+    }
+
+    public List<string> GetUserChannelIds(int userId)
+    {
+        var ids = new List<string>();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT ChannelId FROM ChannelMembers WHERE UserId = @u";
+        cmd.Parameters.AddWithValue("@u", userId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) ids.Add(reader.GetString(0));
+        return ids;
+    }
+
+    public List<ChannelDto> GetUserChannels(int userId)
+    {
+        var list = new List<ChannelDto>();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT c.Id, c.Name, c.OwnerId, COALESCE(u.UserName, 'User'),
+                   (SELECT COUNT(*) FROM ChannelMembers m WHERE m.ChannelId = c.Id)
+            FROM Channels c
+            JOIN ChannelMembers m ON m.ChannelId = c.Id AND m.UserId = @u
+            LEFT JOIN Clients u ON u.Id = c.OwnerId
+            ORDER BY c.Name";
+        cmd.Parameters.AddWithValue("@u", userId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new ChannelDto
+            {
+                Id = reader.GetString(0),
+                Name = reader.GetString(1),
+                OwnerId = reader.GetInt32(2),
+                OwnerName = reader.GetString(3),
+                MembersCount = (int)reader.GetInt64(4)
+            });
+        }
+        return list;
+    }
+
+    public List<ChannelMemberDto> GetChannelMembers(string channelId)
+    {
+        var list = new List<ChannelMemberDto>();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT m.UserId, COALESCE(c.UserName, 'User'), m.Role
+            FROM ChannelMembers m
+            LEFT JOIN Clients c ON c.Id = m.UserId
+            WHERE m.ChannelId = @c
+            ORDER BY m.JoinedAt";
+        cmd.Parameters.AddWithValue("@c", channelId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new ChannelMemberDto
+            {
+                UserId = reader.GetInt32(0),
+                UserName = reader.GetString(1),
+                Role = reader.GetString(2)
+            });
+        }
+        return list;
+    }
+
+    public void SaveChannelMessage(string messageId, string channelId, int senderId,
+        string? nonce, string? ciphertext, string? tag,
+        string contentType, string? fileName, long fileSize, string? fileTransferId,
+        long chainIteration)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO Messages
+            (MessageId, SenderId, ReceiverId, ChannelId, Nonce, Ciphertext, Tag,
+             ContentType, FileName, FileSize, FileTransferId, ChainIteration, Timestamp, Status)
+            VALUES (@msgId, @sender, 0, @channel, @nonce, @ct, @tag,
+                    @ctype, @fname, @fsize, @ftransfer, @iter, @time, 'Sent')
+            ON CONFLICT(MessageId) DO NOTHING;";
+        cmd.Parameters.AddWithValue("@msgId", messageId);
+        cmd.Parameters.AddWithValue("@sender", senderId);
+        cmd.Parameters.AddWithValue("@channel", channelId);
+        cmd.Parameters.AddWithValue("@nonce", (object?)nonce ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@ct", (object?)ciphertext ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@tag", (object?)tag ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@ctype", contentType);
+        cmd.Parameters.AddWithValue("@fname", (object?)fileName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@fsize", fileSize);
+        cmd.Parameters.AddWithValue("@ftransfer", (object?)fileTransferId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@iter", chainIteration);
+        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Страница истории канала: до limit сообщений старее курсора, по убыванию времени.</summary>
+    public (List<ChannelMessageDto> messages, bool hasMore) GetChannelHistoryPage(
+        string channelId, string? beforeTimestamp, int limit)
+    {
+        var list = new List<ChannelMessageDto>();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT MessageId, SenderId, ChainIteration, Nonce, Ciphertext, Tag,
+                   ContentType, FileName, FileSize, Timestamp, DeletedAt
+            FROM Messages
+            WHERE ChannelId = @c AND (@before IS NULL OR Timestamp < @before)
+            ORDER BY Timestamp DESC
+            LIMIT @limit";
+        cmd.Parameters.AddWithValue("@c", channelId);
+        cmd.Parameters.AddWithValue("@before", (object?)beforeTimestamp ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@limit", limit + 1); // +1 для признака HasMore
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (list.Count >= limit) { list.Clear(); } // переполнение — начинаем заполнять заново
+            list.Add(new ChannelMessageDto
+            {
+                MessageId = reader.GetString(0),
+                SenderId = reader.GetInt32(1),
+                ChainIteration = reader.IsDBNull(2) ? 0 : reader.GetInt64(2),
+                Nonce = reader.IsDBNull(3) ? null : reader.GetString(3),
+                Ciphertext = reader.IsDBNull(4) ? null : reader.GetString(4),
+                Tag = reader.IsDBNull(5) ? null : reader.GetString(5),
+                ContentType = reader.GetString(6),
+                FileName = reader.IsDBNull(7) ? null : reader.GetString(7),
+                FileSize = reader.GetInt64(8),
+                Timestamp = reader.GetString(9),
+                IsDeleted = !reader.IsDBNull(10)
+            });
+        }
+        bool hasMore = list.Count > 0 && HasOlderChannelMessages(conn, channelId, list[^1].Timestamp);
+        return (list, hasMore);
+    }
+
+    private static bool HasOlderChannelMessages(SqliteConnection conn, string channelId, string oldestTimestamp)
+    {
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM Messages WHERE ChannelId = @c AND Timestamp < @t";
+        cmd.Parameters.AddWithValue("@c", channelId);
+        cmd.Parameters.AddWithValue("@t", oldestTimestamp);
+        return (long)cmd.ExecuteScalar()! > 0;
+    }
+
+    public void SaveChannelKey(string channelId, int userId, long version, string encryptedKey)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO ChannelKeys (ChannelId, UserId, Version, EncryptedKey)
+            VALUES (@c, @u, @v, @k)
+            ON CONFLICT(ChannelId, UserId) DO UPDATE SET
+                Version = excluded.Version, EncryptedKey = excluded.EncryptedKey";
+        cmd.Parameters.AddWithValue("@c", channelId);
+        cmd.Parameters.AddWithValue("@u", userId);
+        cmd.Parameters.AddWithValue("@v", version);
+        cmd.Parameters.AddWithValue("@k", encryptedKey);
+        cmd.ExecuteNonQuery();
+    }
+
+    public (long version, string encryptedKey)? GetChannelKey(string channelId, int userId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Version, EncryptedKey FROM ChannelKeys WHERE ChannelId = @c AND UserId = @u";
+        cmd.Parameters.AddWithValue("@c", channelId);
+        cmd.Parameters.AddWithValue("@u", userId);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return null;
+        return (reader.GetInt64(0), reader.GetString(1));
+    }
+
+    /// <summary>Удаление пользователя из всех каналов (при бане). Возвращает затронутые каналы.</summary>
+    public List<string> DeleteUserFromAllChannels(int userId)
+    {
+        var affected = new List<string>();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+
+        var select = conn.CreateCommand();
+        select.CommandText = "SELECT ChannelId FROM ChannelMembers WHERE UserId = @u";
+        select.Parameters.AddWithValue("@u", userId);
+        using (var reader = select.ExecuteReader())
+        {
+            while (reader.Read()) affected.Add(reader.GetString(0));
+        }
+
+        var delete = conn.CreateCommand();
+        delete.CommandText = "DELETE FROM ChannelMembers WHERE UserId = @u";
+        delete.Parameters.AddWithValue("@u", userId);
+        delete.ExecuteNonQuery();
+
+        return affected;
     }
 }
