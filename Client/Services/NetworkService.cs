@@ -130,6 +130,20 @@ public class NetworkService
 
     public Task UpdateProfileAsync(UpdateProfilePayload payload) => InvokeAsync("UpdateProfile", payload);
 
+    /// <summary>Отзыв сессии на сервере (Logout). Сбрасывает сохранённый Hello.</summary>
+    public async Task LogoutAsync()
+    {
+        _lastHello = null;
+        await InvokeAsync("Logout");
+    }
+
+    /// <summary>Отключение с опциональным отзывом сессии перед закрытием соединения.</summary>
+    public async Task DisconnectAsync(bool logout = false)
+    {
+        if (logout) await LogoutAsync();
+        Disconnect();
+    }
+
     // ---------- Внутреннее ----------
 
     private async Task InvokeAsync(string methodName, object? payload = null)

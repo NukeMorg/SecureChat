@@ -42,6 +42,8 @@ public class Database
                 Token TEXT PRIMARY KEY,
                 UserId INTEGER NOT NULL,
                 CreatedAt TEXT NOT NULL,
+                ExpiresAt TEXT,
+                IsRevoked INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (UserId) REFERENCES Clients(Id)
             );
             CREATE TABLE IF NOT EXISTS Messages (
@@ -77,7 +79,38 @@ public class Database
             );
             CREATE INDEX IF NOT EXISTS idx_email_rate ON EmailRateLimits(Email, LastSentAt);";
         cmd.ExecuteNonQuery();
+        Migrate(conn);
         Log.Information("База данных инициализирована: {DbPath}", Path.GetFullPath("server.db"));
+    }
+
+    /// <summary>Миграции существующей схемы: добавление колонок через ALTER TABLE.</summary>
+    private static void Migrate(SqliteConnection conn)
+    {
+        bool addedExpiresAt = TryAddColumn(conn, "Sessions", "ExpiresAt", "TEXT");
+        TryAddColumn(conn, "Sessions", "IsRevoked", "INTEGER NOT NULL DEFAULT 0");
+        if (addedExpiresAt)
+        {
+            // легаси-сессии были бессрочными: продлеваем их на 7 дней с момента миграции
+            using var backfill = conn.CreateCommand();
+            backfill.CommandText = "UPDATE Sessions SET ExpiresAt = @e WHERE ExpiresAt IS NULL";
+            backfill.Parameters.AddWithValue("@e", DateTime.UtcNow.AddDays(7).ToString("o"));
+            backfill.ExecuteNonQuery();
+        }
+    }
+
+    private static bool TryAddColumn(SqliteConnection conn, string table, string column, string type)
+    {
+        try
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {type};";
+            cmd.ExecuteNonQuery();
+            return true;
+        }
+        catch (SqliteException ex) when (ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase))
+        {
+            return false; // колонка уже существует
+        }
     }
 
     public void SaveVerificationCode(string email, string code, TimeSpan ttl)
@@ -233,14 +266,19 @@ public class Database
         return null;
     }
 
+    private const int SessionLifetimeDays = 7;
+
     private string CreateSessionInternal(SqliteConnection conn, int userId)
     {
         string token = Guid.NewGuid().ToString("N");
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO Sessions (Token, UserId, CreatedAt) VALUES (@token, @uid, @time)";
+        cmd.CommandText = @"
+            INSERT INTO Sessions (Token, UserId, CreatedAt, ExpiresAt, IsRevoked)
+            VALUES (@token, @uid, @time, @expires, 0)";
         cmd.Parameters.AddWithValue("@token", token);
         cmd.Parameters.AddWithValue("@uid", userId);
         cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("@expires", DateTime.UtcNow.AddDays(SessionLifetimeDays).ToString("o"));
         cmd.ExecuteNonQuery();
         return token;
     }
@@ -256,11 +294,45 @@ public class Database
     {
         using var conn = new SqliteConnection(cs);
         conn.Open();
+        CleanupSessions(conn);
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT UserId FROM Sessions WHERE Token = @token";
+        cmd.CommandText = @"
+            SELECT UserId FROM Sessions
+            WHERE Token = @token AND IsRevoked = 0 AND ExpiresAt > @now";
         cmd.Parameters.AddWithValue("@token", token);
+        cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("o"));
         var result = cmd.ExecuteScalar();
         return result != null ? Convert.ToInt32(result) : null;
+    }
+
+    /// <summary>Logout: удаление сессии по требованию 1.1.2.</summary>
+    public void RevokeSession(string token)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM Sessions WHERE Token = @token";
+        cmd.Parameters.AddWithValue("@token", token);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Отзыв всех сессий пользователя (смена пароля, бан).</summary>
+    public void RevokeAllUserSessions(int userId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM Sessions WHERE UserId = @uid";
+        cmd.Parameters.AddWithValue("@uid", userId);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void CleanupSessions(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM Sessions WHERE ExpiresAt <= @now OR IsRevoked = 1";
+        cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("o"));
+        cmd.ExecuteNonQuery();
     }
 
     public bool UserExists(int id)

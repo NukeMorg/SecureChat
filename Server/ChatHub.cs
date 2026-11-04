@@ -27,6 +27,13 @@ public class ChatHub : Hub
 
     private int? UserId => _registry.GetUserId(Context.ConnectionId);
 
+    private const string SessionTokenKey = "SessionToken";
+
+    private void RememberSessionToken(string? token)
+    {
+        if (!string.IsNullOrEmpty(token)) Context.Items[SessionTokenKey] = token;
+    }
+
     // ---------- Аутентификация ----------
 
     public async Task SendEmailCode(SendEmailCodePayload? p)
@@ -83,6 +90,7 @@ public class ChatHub : Hub
 
         int userId = auth.Value.id;
         _registry.Register(userId, Context.ConnectionId);
+        RememberSessionToken(auth.Value.token);
 
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Login", userId);
         _log.Information("Успешный вход userId={UserId}", userId);
@@ -128,6 +136,7 @@ public class ChatHub : Hub
 
         int userId = reg.Value.id;
         _registry.Register(userId, Context.ConnectionId);
+        RememberSessionToken(reg.Value.token);
 
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Register", userId);
         _log.Information("Зарегистрирован новый пользователь userId={UserId}", userId);
@@ -142,19 +151,19 @@ public class ChatHub : Hub
     {
         if (p == null) return;
 
-        // Ветка Security ужесточит проверку: только токен.
+        // Идентификация только по токену сессии: знание UserId не даёт доступа.
         int? userId = null;
         if (!string.IsNullOrEmpty(p.Token)) userId = _db.ValidateSession(p.Token);
-        else if (p.ClientId > 0 && _db.UserExists(p.ClientId)) userId = p.ClientId;
 
         if (userId == null)
         {
-            _log.Warning("Hello с неизвестным клиентом");
+            _log.Warning("Hello rejected: invalid or expired token");
             await Respond("Error", new SimpleStatusPayload { Status = "UnknownClient" });
             return;
         }
 
         _registry.Register(userId.Value, Context.ConnectionId);
+        RememberSessionToken(p.Token);
         string name = _db.GetUserName(userId.Value) ?? $"User {userId.Value}";
 
         _log.Information("Hello: reconnect userId={UserId}", userId.Value);
@@ -164,6 +173,24 @@ public class ChatHub : Hub
 
         await NotifyOnlineStatus(userId.Value);
         await PushPendingMessages(userId.Value);
+    }
+
+    public async Task Logout()
+    {
+        if (_registry.GetUserId(Context.ConnectionId) is not int uid) return;
+
+        if (Context.Items.TryGetValue(SessionTokenKey, out var tokenObj) && tokenObj is string token)
+            _db.RevokeSession(token);
+
+        _registry.Unregister(Context.ConnectionId, out _);
+        Context.Items.Remove(SessionTokenKey);
+
+        _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId}", "Logout", uid);
+
+        await Respond("LogoutResponse", new SimpleStatusPayload { Status = "Ok" });
+        await Clients.AllExcept(Context.ConnectionId).SendAsync("UserOffline",
+            new OnlineStatusPayload { UserId = uid });
+        Context.Abort();
     }
 
     // ---------- Direct-чаты ----------

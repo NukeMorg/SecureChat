@@ -249,9 +249,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SwitchAccount_Click(object sender, RoutedEventArgs e)
+    private async void SwitchAccount_Click(object sender, RoutedEventArgs e)
     {
-        _network.Disconnect();
+        await _network.DisconnectAsync(logout: true);
         LoginWindow.ClearAutoLoginState();
         var app = (App)Application.Current;
         app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -713,7 +713,7 @@ public partial class MainWindow : Window
     private void Window_Closing(object sender, CancelEventArgs e)
     {
         Log.Information("Закрытие MainWindow userId={UserId}", _clientId);
-        _network.Disconnect();
+        _ = _network.DisconnectAsync(logout: true);
     }
 
     private string? ShowInputDialog(string title, string defaultText)
