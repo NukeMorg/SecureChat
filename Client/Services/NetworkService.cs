@@ -51,7 +51,7 @@ public class NetworkService
 
         try
         {
-            Log.Information("Подключение к {Url}", hubUrl);
+            Log.Information("Connecting to {Url}", hubUrl);
             _hub = new HubConnectionBuilder()
                 .WithUrl(hubUrl)
                 .WithAutomaticReconnect(new[]
@@ -66,12 +66,12 @@ public class NetworkService
             _hub.Closed += OnHubClosed;
 
             await _hub.StartAsync();
-            Log.Information("Соединение установлено {Url}", hubUrl);
+            Log.Information("Connected to {Url}", hubUrl);
             OnConnected?.Invoke();
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Ошибка подключения к {Url}", hubUrl);
+            Log.Error(ex, "Failed to connect to {Url}", hubUrl);
             OnError?.Invoke($"Ошибка подключения к {hubUrl}: {ex.Message}");
             Disconnect();
             throw;
@@ -93,7 +93,7 @@ public class NetworkService
         }
         catch { }
 
-        Log.Information("Отключение от сервера");
+        Log.Information("Disconnecting from server");
         _ = Task.Run(async () => { try { await hub.DisposeAsync(); } catch { } });
         if (wasActive) OnDisconnected?.Invoke();
     }
@@ -165,7 +165,7 @@ public class NetworkService
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Ошибка отправки {Method}", methodName);
+            Log.Error(ex, "Send error {Method}", methodName);
             OnError?.Invoke($"Ошибка отправки: {ex.Message}");
         }
         finally
@@ -196,7 +196,7 @@ public class NetworkService
 
     private async Task OnHubReconnected(string? connectionId)
     {
-        Log.Information("Авто-реконнект выполнен connectionId={ConnectionId}", connectionId);
+        Log.Information("Auto-reconnect completed connectionId={ConnectionId}", connectionId);
         var hub = _hub;
         if (hub != null && _lastHello != null)
         {
@@ -207,7 +207,7 @@ public class NetworkService
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Не удалось восстановить сессию после реконнекта");
+                Log.Warning(ex, "Failed to restore session after reconnect");
             }
         }
         OnConnected?.Invoke();
@@ -215,7 +215,7 @@ public class NetworkService
 
     private Task OnHubClosed(Exception? error)
     {
-        if (error != null) Log.Warning(error, "Соединение закрыто с ошибкой");
+        if (error != null) Log.Warning(error, "Connection closed with error");
         OnDisconnected?.Invoke();
         return Task.CompletedTask;
     }

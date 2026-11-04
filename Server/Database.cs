@@ -88,7 +88,7 @@ public class Database
             CREATE INDEX IF NOT EXISTS idx_login_attempts ON LoginAttempts(Email, AttemptedAt);";
         cmd.ExecuteNonQuery();
         Migrate(conn);
-        Log.Information("База данных инициализирована: {DbPath}", Path.GetFullPath("server.db"));
+        Log.Information("Database initialized: {DbPath}", Path.GetFullPath("server.db"));
     }
 
     /// <summary>Миграции существующей схемы: добавление колонок через ALTER TABLE.</summary>
@@ -283,7 +283,7 @@ public class Database
 
         int id = Convert.ToInt32(insertCmd.ExecuteScalar());
         string token = CreateSessionInternal(conn, id);
-        Log.Debug("RegisterUser создан userId={UserId}", id);
+        Log.Debug("RegisterUser created userId={UserId}", id);
         return (id, token);
     }
 
@@ -468,7 +468,7 @@ public class Database
         cmd.ExecuteNonQuery();
         sw.Stop();
         if (sw.ElapsedMilliseconds > 100)
-            Log.Warning("SaveMessage медленно: {DurationMs}ms messageId={MessageId}", sw.ElapsedMilliseconds, messageId);
+            Log.Warning("SaveMessage slow: {DurationMs}ms messageId={MessageId}", sw.ElapsedMilliseconds, messageId);
     }
 
     public void UpdateMessageStatus(string messageId, string status)

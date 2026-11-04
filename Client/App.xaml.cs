@@ -28,7 +28,7 @@ public partial class App : Application
             .Enrich.FromLogContext()
             .CreateLogger();
 
-        Log.Information("=== SecureChat Client запуск v2.0 на {Machine} ===", Environment.MachineName);
+        Log.Information("=== SecureChat Client started v2.0 on {Machine} ===", Environment.MachineName);
         AppDomain.CurrentDomain.UnhandledException += (_, ex) =>
             Log.Fatal(ex.ExceptionObject as Exception, "UnhandledException");
         TaskScheduler.UnobservedTaskException += (_, ex) =>
@@ -41,7 +41,7 @@ public partial class App : Application
         var saved = LoginWindow.ReadAutoLoginConfig();
         if (saved != null)
         {
-            Log.Information("Попытка авто-входа userId={UserId}", saved.UserId);
+            Log.Information("Auto-login attempt userId={UserId}", saved.UserId);
             var session = LoginWindow.TryAutoLoginBlocking(Network, saved, timeoutMs: 5000);
             if (session != null)
             {
@@ -52,7 +52,7 @@ public partial class App : Application
                 mainWindow.Show();
                 return;
             }
-            Log.Warning("Авто-вход не удался, показываем окно входа");
+            Log.Warning("Auto-login failed, showing login window");
         }
 
         var loginWindow = new LoginWindow(Network);
@@ -68,7 +68,7 @@ public partial class App : Application
         }
         else
         {
-            Log.Information("Вход отменён — приложение завершается");
+            Log.Information("Login cancelled - shutting down");
             Network.Disconnect();
             Log.CloseAndFlush();
             Shutdown();
@@ -77,7 +77,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        Log.Information("=== SecureChat Client завершение ===");
+        Log.Information("=== SecureChat Client shutdown ===");
         Log.CloseAndFlush();
         base.OnExit(e);
     }
@@ -108,7 +108,7 @@ public partial class App : Application
         if (saveToSettings && changed)
         {
             try { AppSettings.Default.Theme = theme; AppSettings.Default.Save(); }
-            catch (Exception ex) { Log.Warning(ex, "Не удалось сохранить тему"); }
+            catch (Exception ex) { Log.Warning(ex, "Failed to save theme"); }
         }
     }
 
@@ -121,7 +121,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Не удалось прочитать тему, используется Dark");
+            Log.Warning(ex, "Failed to read theme, using Dark");
             return "Dark";
         }
     }
