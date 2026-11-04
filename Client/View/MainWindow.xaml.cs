@@ -732,6 +732,7 @@ public partial class MainWindow : Window
         if (ChannelsListBox.SelectedItem is not ChannelItem channel) return;
         _currentChannel = channel;
         _currentContactId = -1;
+        channel.UnreadCount = 0;
 
         if (!_allChannelMessages.ContainsKey(channel.Id))
             _allChannelMessages[channel.Id] = new ObservableCollection<DialogMessage>();
@@ -877,7 +878,19 @@ public partial class MainWindow : Window
                 };
                 if (_allChannelMessages.TryGetValue(msg.ChannelId, out var chanCol))
                     ApplyReplyPreview(dm, chanCol);
+
+                // упоминание @ник (требование 1.2.4): подсветка в имени отправителя
+                if (dm.Text.Contains("@" + _userName, StringComparison.OrdinalIgnoreCase))
+                    dm.SenderName = "🔔 " + (dm.SenderName == "" ? _userName : dm.SenderName);
+
                 AddChannelMessage(msg.ChannelId, dm);
+
+                // счётчик непрочитанных канала
+                if (_currentChannel?.Id != msg.ChannelId || ListModeComboBox.SelectedIndex != 1)
+                {
+                    var channelItem = _channels.FirstOrDefault(c => c.Id == msg.ChannelId);
+                    if (channelItem != null) channelItem.UnreadCount++;
+                }
             }
             catch (Exception ex)
             {
@@ -1592,6 +1605,13 @@ public partial class MainWindow : Window
                     ApplyReplyPreview(incoming, col);
                 AddMessage(msg.SenderId, incoming);
 
+                // счётчик непрочитанных: сообщение пришло не в открытый диалог
+                if (_currentContactId != msg.SenderId || ListModeComboBox.SelectedIndex != 0)
+                {
+                    var contact = _contacts.FirstOrDefault(c => c.Id == msg.SenderId);
+                    if (contact != null) contact.UnreadCount++;
+                }
+
                 _ = _network.AckAsync(new AckPayload { MessageId = msg.MessageId, Status = "Delivered" });
             }
             else if (msg.ContentType == "File")
@@ -1679,6 +1699,7 @@ public partial class MainWindow : Window
         {
             _currentChannel = null;
             _currentContactId = contact.Id;
+            contact.UnreadCount = 0;
             if (!_allDialogs.ContainsKey(_currentContactId))
                 _allDialogs[_currentContactId] = new ObservableCollection<DialogMessage>();
             MessagesListBox.ItemsSource = _allDialogs[_currentContactId];

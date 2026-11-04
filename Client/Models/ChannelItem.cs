@@ -26,6 +26,21 @@ public class ChannelItem : INotifyPropertyChanged
         set { _subtitle = value; OnPropertyChanged(nameof(Subtitle)); }
     }
 
+    // Непрочитанные сообщения канала (Фаза D)
+    private int _unreadCount;
+    public int UnreadCount
+    {
+        get => _unreadCount;
+        set
+        {
+            _unreadCount = value;
+            OnPropertyChanged(nameof(UnreadCount));
+            OnPropertyChanged(nameof(UnreadBadge));
+        }
+    }
+
+    public string UnreadBadge => _unreadCount > 0 ? $"● {_unreadCount}" : "";
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private void OnPropertyChanged(string propertyName) =>

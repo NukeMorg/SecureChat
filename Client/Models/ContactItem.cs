@@ -57,6 +57,21 @@ public class ContactItem : INotifyPropertyChanged
         }
     }
 
+    // Непрочитанные сообщения (Фаза D): счётчик сбрасывается при открытии диалога
+    private int _unreadCount;
+    public int UnreadCount
+    {
+        get => _unreadCount;
+        set
+        {
+            _unreadCount = value;
+            OnPropertyChanged(nameof(UnreadCount));
+            OnPropertyChanged(nameof(UnreadBadge));
+        }
+    }
+
+    public string UnreadBadge => _unreadCount > 0 ? $"● {_unreadCount}" : "";
+
     public event PropertyChangedEventHandler? PropertyChanged;
     // Уведомление UI об изменении свойства
     protected void OnPropertyChanged(string prop) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(prop));
