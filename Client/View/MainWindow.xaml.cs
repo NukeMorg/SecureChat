@@ -1385,7 +1385,7 @@ public partial class MainWindow : Window
                         ReceiverId = hm.ReceiverId,
                         Text = Encoding.UTF8.GetString(plain),
                         ContentType = "Text",
-                        Status = hm.Status,
+                        Status = MapStatusGlyph(hm.Status),
                         IsOutgoing = hm.SenderId == _clientId,
                         Timestamp = DateTime.Parse(hm.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
                     };
@@ -1399,7 +1399,7 @@ public partial class MainWindow : Window
                         ReceiverId = hm.ReceiverId,
                         FilePath = hm.FileName ?? "file",
                         ContentType = "File",
-                        Status = hm.Status,
+                        Status = MapStatusGlyph(hm.Status),
                         IsOutgoing = hm.SenderId == _clientId,
                         Timestamp = DateTime.Parse(hm.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
                     };
@@ -1467,6 +1467,16 @@ public partial class MainWindow : Window
         });
     }
 
+    /// <summary>Глифы статусов доставки: Sent → Delivered → Read (требование 1.2.5).</summary>
+    private static string MapStatusGlyph(string status) => status switch
+    {
+        "Sent" => "✓",
+        "Delivered" => "✓✓",
+        "Read" => "✓✓✓",
+        "UserOffline" => "✗ офлайн",
+        _ => status
+    };
+
     private void OnDeliveryStatus(DeliveryStatusPayload status)
     {
         Dispatcher.Invoke(() =>
@@ -1475,13 +1485,7 @@ public partial class MainWindow : Window
             var msg = _allDialogs.Values.SelectMany(c => c).FirstOrDefault(m => m.Id == status.MessageId);
             if (msg != null)
             {
-                msg.Status = status.Status switch
-                {
-                    "Sent" => "✓",
-                    "Delivered" => "✓✓",
-                    "UserOffline" => "✗ офлайн",
-                    _ => status.Status
-                };
+                msg.Status = MapStatusGlyph(status.Status);
                 MessagesListBox.Items.Refresh();
             }
         });
@@ -1620,6 +1624,11 @@ public partial class MainWindow : Window
 
             if (_allDialogs[_currentContactId].Count == 0)
                 await LoadDirectHistoryAsync(contact.Id, loadMore: false);
+
+            // Read-статусы: диалог открыт — все входящие сообщения прочитаны
+            foreach (var m in _allDialogs[_currentContactId].Where(m => !m.IsOutgoing))
+                _ = _network.AckAsync(new AckPayload { MessageId = m.Id, Status = "Read" });
+
             UpdateLoadMoreButton();
         }
     }

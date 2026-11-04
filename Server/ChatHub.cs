@@ -743,18 +743,20 @@ public class ChatHub : Hub
 
     public async Task Ack(AckPayload? p)
     {
-        if (UserId == null || p == null || p.Status != "Delivered") return;
+        if (UserId == null || p == null) return;
+        // Delivered — при получении, Read — при открытии чата (требование 1.2.5)
+        if (p.Status != "Delivered" && p.Status != "Read") return;
 
-        _db.UpdateMessageStatus(p.MessageId, "Delivered");
+        _db.UpdateMessageStatus(p.MessageId, p.Status);
         var senderId = _db.GetSenderByMessageId(p.MessageId);
         if (senderId.HasValue)
         {
             var conns = _registry.GetConnections(senderId.Value);
             if (conns.Count > 0)
                 await Clients.Clients(conns).SendAsync("DeliveryStatus",
-                    new DeliveryStatusPayload { MessageId = p.MessageId, Status = "Delivered" });
+                    new DeliveryStatusPayload { MessageId = p.MessageId, Status = p.Status });
         }
-        _log.Debug("Ack Delivered messageId={MessageId}", p.MessageId);
+        _log.Debug("Ack {Status} messageId={MessageId}", p.Status, p.MessageId);
     }
 
     public Task<HistoryResponsePayload?> GetHistory(GetHistoryRequestPayload? p)
