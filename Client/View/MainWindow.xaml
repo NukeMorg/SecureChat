@@ -139,6 +139,7 @@
             <!-- Экспорт (только клиент, расшифрованные данные текущего чата) -->
             <MenuItem Header="Экспорт">
                 <MenuItem Header="Текущий чат в Excel..." Click="ExportExcel_Click"/>
+                <MenuItem Header="Текущий чат в Word..." Click="ExportWord_Click"/>
             </MenuItem>
 
             <!-- Каналы (создание и участники — только HR/Admin) -->

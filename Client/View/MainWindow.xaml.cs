@@ -1428,6 +1428,39 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ExportWord_Click(object sender, RoutedEventArgs e)
+    {
+        var rows = CollectCurrentChatRows();
+        if (rows == null)
+        {
+            MessageBox.Show("Выберите чат для экспорта.", "Экспорт",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Экспорт в Word",
+            Filter = "Документ Word (*.docx)|*.docx",
+            FileName = PathSanitizer.SanitizeFileName($"chat-{DateTime.Now:yyyyMMdd-HHmm}", "chat") + ".docx"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            var stats = ChatAggregator.Aggregate(rows);
+            new WordStatsRenderer().Render(stats, dlg.FileName);
+            Log.Information("Chat exported to Word {File} rows={Count}", dlg.FileName, stats.TotalMessages);
+            MessageBox.Show($"Экспорт выполнен: {stats.TotalMessages:N0} сообщений.\n{dlg.FileName}",
+                "Экспорт", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Word export failed");
+            MessageBox.Show($"Ошибка экспорта: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private static string MapChannelError(string? status) => status switch
     {
         "Forbidden" => "Недостаточно прав (нужна роль HR или Admin).",
