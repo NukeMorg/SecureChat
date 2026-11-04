@@ -74,13 +74,14 @@ public class JoinChannelPayload
 }
 
 /// <summary>
-/// Доставка GroupKey участнику через 1-1 E2E: ключ зашифрован его RSA-публичным ключом.
+/// Доставка GroupKey участнику через 1-1 E2E: ключ зашифрован RSA-публичным ключом получателя (TargetId).
 /// Сервер сохраняет EncryptedKey для восстановления после перезапуска клиента и
 /// ретранслирует получателю. Открытый ключ серверу недоступен.
 /// </summary>
 public class GroupKeyDeliveryPayload
 {
     [JsonPropertyName("ChannelId")] public string ChannelId { get; set; } = "";
+    [JsonPropertyName("TargetId")] public int TargetId { get; set; }
     [JsonPropertyName("Version")] public long Version { get; set; }
     [JsonPropertyName("EncryptedKey")] public string EncryptedKey { get; set; } = "";
 }

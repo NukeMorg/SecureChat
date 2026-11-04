@@ -137,6 +137,7 @@ public class ChatHub : Hub
 
         await NotifyOnlineStatus(userId);
         await PushPendingMessages(userId);
+        await JoinChannelGroups(userId);
     }
 
     public async Task RegisterAccount(RegisterAccountPayload? p)
@@ -228,6 +229,7 @@ public class ChatHub : Hub
 
         await NotifyOnlineStatus(userId.Value);
         await PushPendingMessages(userId.Value);
+        await JoinChannelGroups(userId.Value);
     }
 
     public async Task Logout()
@@ -427,6 +429,181 @@ public class ChatHub : Hub
             TotalCount = _db.GetAuditLogCount(),
             Entries = _db.GetAuditLog(limit, offset)
         });
+    }
+
+    // ---------- Каналы (Фаза C) ----------
+
+    private bool IsHrOrAdmin() => Role() is "Admin" or "HR";
+
+    /// <summary>Подключение добавляется в SignalR-группы всех каналов пользователя.</summary>
+    private async Task JoinChannelGroups(int userId)
+    {
+        foreach (var channelId in _db.GetUserChannelIds(userId))
+            await Groups.AddToGroupAsync(Context.ConnectionId, channelId);
+    }
+
+    public async Task<CreateChannelResponsePayload> CreateChannel(CreateChannelPayload? p)
+    {
+        if (UserId is not int uid) return new CreateChannelResponsePayload { Status = "Forbidden" };
+        if (!IsHrOrAdmin()) return new CreateChannelResponsePayload { Status = "Forbidden" };
+        if (p == null || string.IsNullOrWhiteSpace(p.Name) ||
+            p.Name.Length > 100 || Validators.HasControlCharacters(p.Name))
+            return new CreateChannelResponsePayload { Status = "InvalidName" };
+
+        string? channelId = _db.CreateChannel(p.Name.Trim(), uid);
+        if (channelId == null) return new CreateChannelResponsePayload { Status = "NameExists" };
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, channelId);
+        WriteAudit(uid, "CreateChannel", null, "Ok");
+        _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} channelId={ChannelId}",
+            "CreateChannel", uid, channelId);
+
+        return new CreateChannelResponsePayload { Status = "Ok", ChannelId = channelId };
+    }
+
+    public Task<ChannelListPayload> GetChannels()
+    {
+        if (UserId is not int uid) return Task.FromResult(new ChannelListPayload());
+        return Task.FromResult(new ChannelListPayload { Channels = _db.GetUserChannels(uid) });
+    }
+
+    public Task<ChannelMembersPayload?> GetChannelMembers(JoinChannelPayload? p)
+    {
+        if (UserId is not int uid || p == null ||
+            !_db.ChannelExists(p.ChannelId) || !_db.IsChannelMember(p.ChannelId, uid))
+            return Task.FromResult<ChannelMembersPayload?>(null);
+
+        var members = _db.GetChannelMembers(p.ChannelId);
+        foreach (var m in members) m.IsOnline = _registry.IsOnline(m.UserId);
+        return Task.FromResult<ChannelMembersPayload?>(
+            new ChannelMembersPayload { ChannelId = p.ChannelId, Members = members });
+    }
+
+    public async Task<SimpleStatusPayload> JoinChannel(JoinChannelPayload? p)
+    {
+        if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (p == null || !_db.ChannelExists(p.ChannelId) || !_db.IsChannelMember(p.ChannelId, uid))
+            return new SimpleStatusPayload { Status = "NotFound" };
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, p.ChannelId);
+
+        // восстановление GroupKey после перезапуска клиента (ключ хранится зашифрованным RSA)
+        var key = _db.GetChannelKey(p.ChannelId, uid);
+        if (key.HasValue)
+        {
+            await Respond("GroupKeyDelivery", new GroupKeyDeliveryPayload
+            {
+                ChannelId = p.ChannelId, Version = key.Value.version, EncryptedKey = key.Value.encryptedKey
+            });
+        }
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
+    public async Task<SimpleStatusPayload> LeaveChannel(JoinChannelPayload? p)
+    {
+        if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (p == null || !_db.ChannelExists(p.ChannelId))
+            return new SimpleStatusPayload { Status = "NotFound" };
+
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, p.ChannelId);
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
+    public async Task<SimpleStatusPayload> AddChannelMember(AddChannelMemberPayload? p)
+    {
+        if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (!IsHrOrAdmin()) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (p == null || !_db.ChannelExists(p.ChannelId) || !_db.IsChannelMember(p.ChannelId, uid))
+            return new SimpleStatusPayload { Status = "NotFound" };
+        if (p.UserId <= 0 || !_db.UserExists(p.UserId))
+            return new SimpleStatusPayload { Status = "NotFound" };
+        if (_db.IsChannelMember(p.ChannelId, p.UserId))
+            return new SimpleStatusPayload { Status = "AlreadyMember" };
+
+        _db.AddChannelMemberToChannel(p.ChannelId, p.UserId);
+
+        var targetConns = _registry.GetConnections(p.UserId);
+        foreach (var connId in targetConns)
+            await Groups.AddToGroupAsync(connId, p.ChannelId);
+
+        await Clients.Group(p.ChannelId).SendAsync("ChannelMemberAdded",
+            new ChannelMemberAddedPayload { ChannelId = p.ChannelId, UserId = p.UserId });
+
+        WriteAudit(uid, "AddChannelMember", p.UserId, "Ok");
+        _log.ForContext("Audit", true).Information(
+            "AUDIT {Action} userId={UserId} channelId={ChannelId} targetId={TargetId}",
+            "AddChannelMember", uid, p.ChannelId, p.UserId);
+
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
+    public async Task<SimpleStatusPayload> RemoveChannelMember(RemoveChannelMemberPayload? p)
+    {
+        if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (!IsHrOrAdmin()) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (p == null || !_db.ChannelExists(p.ChannelId) || !_db.IsChannelMember(p.ChannelId, uid))
+            return new SimpleStatusPayload { Status = "NotFound" };
+        if (!_db.IsChannelMember(p.ChannelId, p.UserId))
+            return new SimpleStatusPayload { Status = "NotFound" };
+        if (p.UserId == _db.GetChannelOwnerId(p.ChannelId))
+            return new SimpleStatusPayload { Status = "CannotRemoveOwner" };
+        if (p.UserId == uid)
+            return new SimpleStatusPayload { Status = "CannotRemoveSelf" };
+
+        _db.RemoveChannelMemberFromChannel(p.ChannelId, p.UserId);
+
+        foreach (var connId in _registry.GetConnections(p.UserId))
+            await Groups.RemoveFromGroupAsync(connId, p.ChannelId);
+
+        await Clients.Group(p.ChannelId).SendAsync("ChannelMemberRemoved",
+            new ChannelMemberRemovedPayload { ChannelId = p.ChannelId, UserId = p.UserId });
+
+        WriteAudit(uid, "RemoveChannelMember", p.UserId, "Ok");
+        _log.ForContext("Audit", true).Information(
+            "AUDIT {Action} userId={UserId} channelId={ChannelId} targetId={TargetId}",
+            "RemoveChannelMember", uid, p.ChannelId, p.UserId);
+
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
+    /// <summary>
+    /// Доставка GroupKey (зашифрованного RSA получателя) — ретрансляция 1-1 + сохранение
+    /// для восстановления после перезапуска. Сервер не видит открытый ключ.
+    /// </summary>
+    public async Task SendGroupKeyDelivery(GroupKeyDeliveryPayload? p)
+    {
+        if (UserId is not int uid) return;
+        if (p == null || p.TargetId <= 0 || string.IsNullOrEmpty(p.ChannelId) ||
+            string.IsNullOrEmpty(p.EncryptedKey) || p.Version < 0) return;
+        if (!_db.IsChannelMember(p.ChannelId, uid) || !_db.IsChannelMember(p.ChannelId, p.TargetId)) return;
+
+        _db.SaveChannelKey(p.ChannelId, p.TargetId, p.Version, p.EncryptedKey);
+
+        var conns = _registry.GetConnections(p.TargetId);
+        if (conns.Count > 0)
+        {
+            await Clients.Clients(conns).SendAsync("GroupKeyDelivery",
+                new GroupKeyDeliveryPayload
+                {
+                    ChannelId = p.ChannelId, Version = p.Version, EncryptedKey = p.EncryptedKey
+                });
+        }
+        _log.Debug("GroupKey delivered channelId={ChannelId} targetId={TargetId} version={Version}",
+            p.ChannelId, p.TargetId, p.Version);
+    }
+
+    public async Task SendChannelKeyRotated(ChannelKeyRotatedPayload? p)
+    {
+        if (UserId is not int uid) return;
+        if (p == null || !_db.IsChannelMember(p.ChannelId, uid)) return;
+        // анонсировать ротацию может только Owner или HR/Admin
+        if (!IsHrOrAdmin() && _db.GetChannelOwnerId(p.ChannelId) != uid) return;
+
+        await Clients.OthersInGroup(p.ChannelId).SendAsync("ChannelKeyRotated", p);
+        WriteAudit(uid, "RotateGroupKey", null, "Ok");
+        _log.ForContext("Audit", true).Information(
+            "AUDIT {Action} userId={UserId} channelId={ChannelId} version={Version}",
+            "RotateGroupKey", uid, p.ChannelId, p.Version);
     }
 
     // ---------- Direct-чаты ----------
