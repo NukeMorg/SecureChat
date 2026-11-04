@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace SecureChat.Client.Services;
+namespace SecureChat.Core;
 
 /// <summary>
 /// Групповая криптография каналов (Фаза C, требование 1.2.7).
