@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace SecureChat.Client.Services;
+namespace SecureChat.Core;
 
 /// <summary>
 /// Групповая криптография каналов (Фаза C, требование 1.2.7).
@@ -120,11 +120,12 @@ public class ChannelCrypto
         lock (_lock)
         {
             if (!_groupKeys.TryGetValue(channelId, out var groupKey)) return null;
-            if (_messageKeys.TryGetValue((channelId, senderId, iteration), out var cached)) return cached;
 
+            // replay-защита строго по курсору: итерация позади обработанной — reject (требование 1.2.7)
             var state = GetOrInitRatchet(channelId, senderId, groupKey);
-            if (iteration < state.NextIteration) return null; // replay
+            if (iteration < state.NextIteration) return null;
             if (iteration - state.NextIteration > MaxCatchUpIterations) return null;
+            if (_messageKeys.TryGetValue((channelId, senderId, iteration), out var cached)) return cached;
 
             CatchUp(channelId, senderId, state, iteration);
 
@@ -180,7 +181,8 @@ public class ChannelCrypto
         return state;
     }
 
-    internal static byte[] DeriveInitialChainKey(byte[] groupKey, int senderId)
+    /// <summary>Начальный ChainKey отправителя: HMAC-SHA256(GroupKey, "chain"||SenderId) — public для тестов KDF.</summary>
+    public static byte[] DeriveInitialChainKey(byte[] groupKey, int senderId)
     {
         using var hmac = new HMACSHA256(groupKey);
         byte[] label = Encoding.UTF8.GetBytes("chain" + senderId.ToString(CultureInfo.InvariantCulture));

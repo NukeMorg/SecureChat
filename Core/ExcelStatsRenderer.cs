@@ -1,8 +1,7 @@
 using System.Globalization;
 using ClosedXML.Excel;
-using SecureChat.Core;
 
-namespace SecureChat.Client.Services;
+namespace SecureChat.Core;
 
 /// <summary>
 /// Экспорт чата в Excel (требование 1.5.1, ClosedXML).

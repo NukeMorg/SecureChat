@@ -3,9 +3,8 @@ using System.Xml;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
-using SecureChat.Core;
 
-namespace SecureChat.Client.Services;
+namespace SecureChat.Core;
 
 /// <summary>
 /// Экспорт чата в Word (требование 1.5.2, OpenXML SDK).

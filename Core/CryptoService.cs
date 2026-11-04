@@ -1,6 +1,6 @@
 ﻿using System.Security.Cryptography;
 
-namespace SecureChat.Client.Services;
+namespace SecureChat.Core;
 
 // Криптографические операции: RSA, AES-GCM, генерация сессионного ключа.
 public class CryptoService
