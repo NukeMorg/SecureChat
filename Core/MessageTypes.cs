@@ -331,7 +331,7 @@ public class UnbanUserPayload
 }
 
 /// <summary>
-/// Запрос смены роли (только Admin): "Admin" | "HR" | "Employee".
+/// Запрос смены роли (только Admin): "Admin" | "Manager" | "Employee".
 /// </summary>
 public class ChangeRolePayload
 {

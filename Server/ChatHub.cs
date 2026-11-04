@@ -313,7 +313,7 @@ public class ChatHub : Hub
         if (p.TargetId == UserId)
             // защита от потери последнего Admin
             return Task.FromResult(new SimpleStatusPayload { Status = "CannotChangeOwnRole" });
-        if (p.Role is not ("Admin" or "HR" or "Employee"))
+        if (p.Role is not ("Admin" or "Manager" or "Employee"))
             return Task.FromResult(new SimpleStatusPayload { Status = "InvalidRole" });
 
         int adminId = UserId!.Value;
@@ -443,7 +443,7 @@ public class ChatHub : Hub
 
     // ---------- Каналы (Фаза C) ----------
 
-    private bool IsHrOrAdmin() => Role() is "Admin" or "HR";
+    private bool IsManagerOrAdmin() => Role() is "Admin" or "Manager";
 
     /// <summary>Подключение добавляется в SignalR-группы всех каналов пользователя.</summary>
     private async Task JoinChannelGroups(int userId)
@@ -455,7 +455,7 @@ public class ChatHub : Hub
     public async Task<CreateChannelResponsePayload> CreateChannel(CreateChannelPayload? p)
     {
         if (UserId is not int uid) return new CreateChannelResponsePayload { Status = "Forbidden" };
-        if (!IsHrOrAdmin()) return new CreateChannelResponsePayload { Status = "Forbidden" };
+        if (!IsManagerOrAdmin()) return new CreateChannelResponsePayload { Status = "Forbidden" };
         if (p == null || string.IsNullOrWhiteSpace(p.Name) ||
             p.Name.Length > 100 || Validators.HasControlCharacters(p.Name))
             return new CreateChannelResponsePayload { Status = "InvalidName" };
@@ -522,7 +522,7 @@ public class ChatHub : Hub
     public async Task<SimpleStatusPayload> AddChannelMember(AddChannelMemberPayload? p)
     {
         if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
-        if (!IsHrOrAdmin()) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (!IsManagerOrAdmin()) return new SimpleStatusPayload { Status = "Forbidden" };
         if (p == null || !_db.ChannelExists(p.ChannelId) || !_db.IsChannelMember(p.ChannelId, uid))
             return new SimpleStatusPayload { Status = "NotFound" };
         if (p.UserId <= 0 || !_db.UserExists(p.UserId))
@@ -550,7 +550,7 @@ public class ChatHub : Hub
     public async Task<SimpleStatusPayload> RemoveChannelMember(RemoveChannelMemberPayload? p)
     {
         if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
-        if (!IsHrOrAdmin()) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (!IsManagerOrAdmin()) return new SimpleStatusPayload { Status = "Forbidden" };
         if (p == null || !_db.ChannelExists(p.ChannelId) || !_db.IsChannelMember(p.ChannelId, uid))
             return new SimpleStatusPayload { Status = "NotFound" };
         if (!_db.IsChannelMember(p.ChannelId, p.UserId))
@@ -607,7 +607,7 @@ public class ChatHub : Hub
         if (UserId is not int uid) return;
         if (p == null || !_db.IsChannelMember(p.ChannelId, uid)) return;
         // анонсировать ротацию может только Owner или HR/Admin
-        if (!IsHrOrAdmin() && _db.GetChannelOwnerId(p.ChannelId) != uid) return;
+        if (!IsManagerOrAdmin() && _db.GetChannelOwnerId(p.ChannelId) != uid) return;
 
         await Clients.OthersInGroup(p.ChannelId).SendAsync("ChannelKeyRotated", p);
         WriteAudit(uid, "RotateGroupKey", null, "Ok");

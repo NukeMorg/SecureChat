@@ -251,7 +251,7 @@ public partial class MainWindow : Window
         UserIdTextBlock.Text = $"{_userName} (ID: {_clientId})";
         ConnectionIndicator.Fill = _network.IsConnected ? new SolidColorBrush(Colors.LimeGreen) : new SolidColorBrush(Colors.Gray);
         AdminMenu.Visibility = _role == "Admin" ? Visibility.Visible : Visibility.Collapsed;
-        bool hrOrAdmin = _role is "Admin" or "HR";
+        bool hrOrAdmin = _role is "Admin" or "Manager";
         ChannelCreateMenuItem.Visibility = hrOrAdmin ? Visibility.Visible : Visibility.Collapsed;
         ChannelAddMemberMenuItem.Visibility = hrOrAdmin ? Visibility.Visible : Visibility.Collapsed;
         ChannelRemoveMemberMenuItem.Visibility = hrOrAdmin ? Visibility.Visible : Visibility.Collapsed;
@@ -386,13 +386,13 @@ public partial class MainWindow : Window
 
         string? role = ShowInputDialog("Роль: Admin / Менеджер / Employee", "Employee");
         if (string.IsNullOrWhiteSpace(role)) return;
-        // «Менеджер» — отображаемое имя роли HR (внутренний код протокола — HR)
+        // «Менеджер» — русскоязычный ввод роли Manager
         string normalized = role switch
         {
-            "Менеджер" or "Manager" => "HR",
+            "Менеджер" => "Manager",
             _ => role
         };
-        if (normalized is not ("Admin" or "HR" or "Employee"))
+        if (normalized is not ("Admin" or "Manager" or "Employee"))
         {
             MessageBox.Show("Недопустимая роль. Доступны: Admin, Менеджер, Employee.",
                 "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -401,7 +401,7 @@ public partial class MainWindow : Window
 
         var resp = await _network.ChangeRoleAsync(new ChangeRolePayload { TargetId = contact.Id, Role = normalized });
         if (resp?.Status == "Ok")
-            MessageBox.Show($"Роль {contact.Name} (ID: {contact.Id}) изменена на {DisplayRole(normalized)}.",
+            MessageBox.Show($"Роль {contact.Name} (ID: {contact.Id}) изменена на {normalized}.",
                 "Администрирование", MessageBoxButton.OK, MessageBoxImage.Information);
         else
             MessageBox.Show($"Не удалось сменить роль: {MapAdminError(resp?.Status)}",
@@ -413,9 +413,6 @@ public partial class MainWindow : Window
         var window = new AuditLogWindow(_network) { Owner = this };
         window.Show();
     }
-
-    /// <summary>Отображаемое имя роли: HR → «Менеджер» (внутренний код — HR).</summary>
-    private static string DisplayRole(string role) => RoleDisplay.Display(role);
 
     /// <summary>Нейтральные тексты результатов админ-операций.</summary>
     private static string MapAdminError(string? status) => status switch
