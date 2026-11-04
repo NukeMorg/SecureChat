@@ -80,9 +80,19 @@ public class ChatHub : Hub
         }
 
         _log.Information("Попытка входа для {MaskedEmail}", PiiMasking.Email(p.Email));
+
+        string ip = Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        if (_db.IsLoginBlocked(p.Email, ip, TimeSpan.FromMinutes(15), maxAttempts: 5))
+        {
+            _log.Warning("Login rate limit exceeded for {MaskedEmail} ip={Ip}", PiiMasking.Email(p.Email), ip);
+            await Respond("LoginResponse", new LoginResponsePayload { Status = "RateLimited" });
+            return;
+        }
+
         var auth = _db.Authenticate(p.Email, p.Password);
         if (auth == null)
         {
+            _db.RecordFailedLogin(p.Email, ip);
             _log.Warning("Неверные учётные данные для {MaskedEmail}", PiiMasking.Email(p.Email));
             await Respond("LoginResponse", new LoginResponsePayload { Status = "InvalidCredentials" });
             return;

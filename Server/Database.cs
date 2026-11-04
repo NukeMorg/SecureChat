@@ -77,7 +77,14 @@ public class Database
                 Email TEXT NOT NULL,
                 LastSentAt TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_email_rate ON EmailRateLimits(Email, LastSentAt);";
+            CREATE INDEX IF NOT EXISTS idx_email_rate ON EmailRateLimits(Email, LastSentAt);
+            CREATE TABLE IF NOT EXISTS LoginAttempts (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Email TEXT NOT NULL,
+                IpAddress TEXT NOT NULL,
+                AttemptedAt TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_login_attempts ON LoginAttempts(Email, AttemptedAt);";
         cmd.ExecuteNonQuery();
         Migrate(conn);
         Log.Information("База данных инициализирована: {DbPath}", Path.GetFullPath("server.db"));
@@ -165,6 +172,46 @@ public class Database
         var cmd = conn.CreateCommand();
         cmd.CommandText = "DELETE FROM EmailVerifications WHERE Email = @email";
         cmd.Parameters.AddWithValue("@email", email);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Блокировка брутфорса: не более maxAttempts неудачных входов за window по email ИЛИ по IP.</summary>
+    public bool IsLoginBlocked(string email, string ipAddress, TimeSpan window, int maxAttempts)
+    {
+        string normEmail = email.Trim().ToLowerInvariant();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        CleanupLoginAttempts(conn, window);
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT COUNT(*) FROM LoginAttempts
+            WHERE AttemptedAt > @cutoff AND (Email = @email OR IpAddress = @ip)";
+        cmd.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.Subtract(window).ToString("o"));
+        cmd.Parameters.AddWithValue("@email", normEmail);
+        cmd.Parameters.AddWithValue("@ip", ipAddress);
+        return (long)cmd.ExecuteScalar()! >= maxAttempts;
+    }
+
+    public void RecordFailedLogin(string email, string ipAddress)
+    {
+        string normEmail = email.Trim().ToLowerInvariant();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            INSERT INTO LoginAttempts (Email, IpAddress, AttemptedAt)
+            VALUES (@email, @ip, @time)";
+        cmd.Parameters.AddWithValue("@email", normEmail);
+        cmd.Parameters.AddWithValue("@ip", ipAddress);
+        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void CleanupLoginAttempts(SqliteConnection conn, TimeSpan window)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM LoginAttempts WHERE AttemptedAt <= @cutoff";
+        cmd.Parameters.AddWithValue("@cutoff", DateTime.UtcNow.Subtract(window).ToString("o"));
         cmd.ExecuteNonQuery();
     }
 

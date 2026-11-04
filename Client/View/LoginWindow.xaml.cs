@@ -302,8 +302,12 @@ public partial class LoginWindow : Window
             {
                 Log.Warning("Вход отклонён status={Status}", resp.Status);
                 StatusTextBlock.Text = "";
-                ShowErrorPopup(resp.Status == "InvalidCredentials"
-                    ? "Неверная почта или пароль." : "Пользователь не найден.");
+                ShowErrorPopup(resp.Status switch
+                {
+                    "InvalidCredentials" => "Неверная почта или пароль.",
+                    "RateLimited" => "Слишком много попыток входа. Попробуйте через 15 минут.",
+                    _ => "Пользователь не найден."
+                });
                 SubmitButton.IsEnabled = true;
             }
         }
