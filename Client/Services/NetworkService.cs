@@ -142,6 +142,9 @@ public class NetworkService
     public Task<SimpleStatusPayload?> ChangeRoleAsync(ChangeRolePayload payload) =>
         InvokeWithResultAsync("ChangeRole", payload);
 
+    public Task<SimpleStatusPayload?> ChangePasswordAsync(ChangePasswordPayload payload) =>
+        InvokeWithResultAsync("ChangePassword", payload);
+
     /// <summary>Вызов хаб-метода с ответом-статусом (Admin-операции, смена пароля).</summary>
     private async Task<SimpleStatusPayload?> InvokeWithResultAsync(string methodName, object payload)
     {

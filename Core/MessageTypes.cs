@@ -346,3 +346,12 @@ public class BannedPayload
 {
     [JsonPropertyName("Reason")] public string Reason { get; set; } = "";
 }
+
+/// <summary>
+/// Смена пароля: текущий + новый. После успеха все сессии отзываются.
+/// </summary>
+public class ChangePasswordPayload
+{
+    [JsonPropertyName("CurrentPassword")] public string CurrentPassword { get; set; } = "";
+    [JsonPropertyName("NewPassword")] public string NewPassword { get; set; } = "";
+}

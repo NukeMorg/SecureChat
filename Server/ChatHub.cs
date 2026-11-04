@@ -313,6 +313,30 @@ public class ChatHub : Hub
         return Task.FromResult(new SimpleStatusPayload { Status = "Ok" });
     }
 
+    /// <summary>Смена пароля: проверка текущего, отзыв всех сессий (требование 1.1.4).</summary>
+    public async Task<SimpleStatusPayload> ChangePassword(ChangePasswordPayload? p)
+    {
+        if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (p == null) return new SimpleStatusPayload { Status = "Error" };
+
+        if (!_db.VerifyPasswordForUser(uid, p.CurrentPassword, out _))
+        {
+            WriteAudit(uid, "ChangePassword", uid, "WrongPassword");
+            return new SimpleStatusPayload { Status = "WrongPassword" };
+        }
+        if (!Validators.IsValidPassword(p.NewPassword))
+            return new SimpleStatusPayload { Status = "WeakPassword" };
+
+        _db.UpdatePassword(uid, p.NewPassword);
+        _db.RevokeAllUserSessions(uid);
+
+        WriteAudit(uid, "ChangePassword", uid, "Ok");
+        _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId}", "ChangePassword", uid);
+        _log.Information("Password changed, all sessions revoked userId={UserId}", uid);
+
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
     // ---------- Direct-чаты ----------
 
     public async Task SendMessage(SendMessagePayload? p)

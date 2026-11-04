@@ -395,9 +395,37 @@ public partial class MainWindow : Window
         "CannotChangeOwnRole" => "Нельзя изменить собственную роль.",
         "InvalidReason" => "Некорректная причина блокировки.",
         "InvalidRole" => "Недопустимая роль.",
+        "WrongPassword" => "Текущий пароль неверен.",
+        "WeakPassword" => "Пароль: минимум 8 символов, хотя бы одна буква и одна цифра.",
         "NotConnected" => "Нет подключения к серверу.",
         _ => "ошибка сервера."
     };
+
+    // ---------- Смена пароля ----------
+
+    private async void ChangePassword_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new PasswordDialog { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+
+        var resp = await _network.ChangePasswordAsync(new ChangePasswordPayload
+        {
+            CurrentPassword = dlg.CurrentPassword,
+            NewPassword = dlg.NewPassword
+        });
+
+        if (resp?.Status == "Ok")
+        {
+            MessageBox.Show("Пароль изменён. Все сессии отозваны — выполните вход заново.",
+                "Смена пароля", MessageBoxButton.OK, MessageBoxImage.Information);
+            await PerformAccountSwitchAsync();
+        }
+        else
+        {
+            MessageBox.Show($"Не удалось сменить пароль: {MapAdminError(resp?.Status)}",
+                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
 
     private void ShowMyPublicKey_Click(object sender, RoutedEventArgs e)
     {
