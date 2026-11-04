@@ -6,6 +6,7 @@ using Serilog;
 using SecureChat.Client.Services;
 using SecureChat.Client.View;
 using AppSettings = SecureChat.Client.Properties.Settings;
+using Application = System.Windows.Application;
 
 namespace SecureChat.Client;
 

@@ -10,6 +10,7 @@ public partial class PrintOptionsWindow : Window
 {
     public bool IncludeFiles => IncludeFilesCheck.IsChecked == true;
     public bool UseWatermark => WatermarkCheck.IsChecked == true;
+    public bool UseWinForms => WinFormsCheck.IsChecked == true;
     public bool StartPreview { get; private set; }
     public bool SaveXps { get; private set; }
 

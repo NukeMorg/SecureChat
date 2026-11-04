@@ -1,5 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
+using Button = System.Windows.Controls.Button;
+using PrintDialog = System.Windows.Controls.PrintDialog;
+using Size = System.Windows.Size;
 using System.Windows.Documents;
 using System.Printing;
 using System.Windows.Xps;
@@ -53,9 +56,9 @@ public class PrintPreviewWindow : Window
 
         // Отправка на печать через XpsDocumentWriter (WPF)
         PrintQueue? queue = dlg.PrintQueue;
-        XpsDocumentWriter writer = queue != null
+        var writer = queue != null
             ? PrintQueue.CreateXpsDocumentWriter(queue)
-            : PrintQueue.CreateXpsDocumentWriter();
+            : PrintQueue.CreateXpsDocumentWriter(queue)!;
 
         if (dlg.PrintTicket != null)
             writer.Write(paginator, dlg.PrintTicket);

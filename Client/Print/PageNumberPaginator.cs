@@ -2,6 +2,9 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Media;
+using Size = System.Windows.Size;
+using Point = System.Windows.Point;
+using Brushes = System.Windows.Media.Brushes;
 
 namespace SecureChat.Client.Print;
 

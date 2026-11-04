@@ -2,6 +2,9 @@ using System.Drawing;
 using System.Drawing.Printing;
 using SecureChat.Core;
 using SecureChat.Core.Printing;
+using System.Globalization;
+using Serilog;
+using ILogger = Serilog.ILogger;
 
 namespace SecureChat.Client.Print;
 

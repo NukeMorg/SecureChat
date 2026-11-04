@@ -12,6 +12,8 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
+using KeyEventArgs = System.Windows.Input.KeyEventArgs;
+using Size = System.Windows.Size;
 using System.Windows.Xps;
 using System.Printing;
 using System.Windows.Media;
@@ -1554,12 +1556,12 @@ public partial class MainWindow : Window
             doc.PageHeight = 1122.5;
             var xpsPaginator = new PageNumberPaginator(((IDocumentPaginatorSource)doc).DocumentPaginator)
             {
-                PageSize = new Size(doc.PageWidth.Value, doc.PageHeight.Value)
+                PageSize = new Size(doc.PageWidth, doc.PageHeight)
             };
             using var xps = new System.Windows.Xps.Packaging.XpsDocument(
                 xpsDlg.FileName, FileAccess.ReadWrite);
-            var writer = System.Windows.Xps.Packaging.XpsDocument.CreateXpsDocumentWriter(xps);
-            writer.Write(xpsPaginator);
+            var xpsWriter = System.Windows.Xps.Packaging.XpsDocument.CreateXpsDocumentWriter(xps);
+            xpsWriter.Write(xpsPaginator);
             Log.Information("Chat saved to XPS {File} rows={Rows}", xpsDlg.FileName, rows.Count);
             MessageBox.Show($"Сохранено: {xpsDlg.FileName}", "Экспорт",
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1568,6 +1570,19 @@ public partial class MainWindow : Window
 
         var printDialog = new PrintDialog();
         if (printDialog.ShowDialog() != true) return;
+
+        // движок PrintDocument (WinForms): программный вывод каждой страницы
+        if (options.UseWinForms)
+        {
+            var engine = new WinFormsPrintService(_userName, chatTitle, rows, options.UseWatermark);
+            var printDoc = engine.CreateDocument();
+            if (printDialog.PrintQueue != null)
+                printDoc.PrinterSettings.PrinterName = printDialog.PrintQueue.FullName;
+            printDoc.Print();
+            Log.Information("Chat printed via PrintDocument {Chat} pages={Pages} rows={Rows}",
+                chatTitle, engine.TotalPages, rows.Count);
+            return;
+        }
 
         doc.PageWidth = printDialog.PrintableAreaWidth;
         doc.PageHeight = printDialog.PrintableAreaHeight;
@@ -1579,9 +1594,9 @@ public partial class MainWindow : Window
         // Отправка на печать через XpsDocumentWriter (WPF): FlowDocument → paginator → XPS-поток принтера.
         // PrintDialog используется только для выбора принтера и параметров.
         PrintQueue? queue = printDialog.PrintQueue;
-        XpsDocumentWriter writer = queue != null
+        var writer = queue != null
             ? PrintQueue.CreateXpsDocumentWriter(queue)
-            : PrintQueue.CreateXpsDocumentWriter();
+            : PrintQueue.CreateXpsDocumentWriter(queue)!;
 
         if (printDialog.PrintTicket != null)
             writer.Write(paginator, printDialog.PrintTicket);
