@@ -160,9 +160,15 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(ExitCommand, (s, e) => Application.Current.Shutdown()));
         CommandBindings.Add(new CommandBinding(ToggleThemeCommand, (s, e) => ToggleTheme_Click(s, e)));
         CommandBindings.Add(new CommandBinding(ChangeNameCommand, (s, e) => ChangeName_Click(s, e)));
-        CommandBindings.Add(new CommandBinding(SearchMessagesCommand, (s, e) => OpenSearch_Click(s, e)));
+        CommandBindings.Add(new CommandBinding(SearchMessagesCommand, (s, e) => ToggleChatSearch_Click(s, e)));
         _contactsView = CollectionViewSource.GetDefaultView(_contacts);
-        ContactsListBox.ItemsSource = _contactsView;
+        // единый список чатов (Telegram-style): контакты и каналы в одном ListBox
+        var composite = new System.Windows.Data.CompositeCollection
+        {
+            new System.Windows.Data.CollectionContainer { Collection = _contactsView },
+            new System.Windows.Data.CollectionContainer { Collection = _channels }
+        };
+        ContactsListBox.ItemsSource = composite;
     }
 
     private void SearchAndAddTextBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -543,14 +549,6 @@ public partial class MainWindow : Window
 
     // ---------- Каналы: список, создание, участники, ротация ключа (Фаза C) ----------
 
-    private async void ListModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        bool channelsMode = ListModeComboBox.SelectedIndex == 1;
-        ContactsListBox.Visibility = channelsMode ? Visibility.Collapsed : Visibility.Visible;
-        ChannelsListBox.Visibility = channelsMode ? Visibility.Visible : Visibility.Collapsed;
-        if (channelsMode) await RefreshChannelsAsync();
-    }
-
     private async Task RefreshChannelsAsync()
     {
         var list = await _network.GetChannelsAsync();
@@ -572,7 +570,7 @@ public partial class MainWindow : Window
     private async void RefreshChannels_Click(object sender, RoutedEventArgs e)
     {
         await RefreshChannelsAsync();
-        ChannelsListBox.SelectedItem = _currentChannel;
+        ContactsListBox.SelectedItem = _currentChannel;
     }
 
     private async void CreateChannel_Click(object sender, RoutedEventArgs e)
@@ -586,7 +584,8 @@ public partial class MainWindow : Window
             // Owner генерирует GroupKey локально; доставки другим не нужны (участников пока нет)
             _channelCrypto.SetGroupKey(resp.ChannelId, _crypto.GenerateSessionKey());
             await RefreshChannelsAsync();
-            ListModeComboBox.SelectedIndex = 1;
+            var created = _channels.FirstOrDefault(c => c.Id == resp.ChannelId);
+            if (created != null) ContactsListBox.SelectedItem = created;
         }
         else
         {
@@ -597,7 +596,7 @@ public partial class MainWindow : Window
 
     private async void AddChannelMember_Click(object sender, RoutedEventArgs e)
     {
-        if (ChannelsListBox.SelectedItem is not ChannelItem channel)
+        if (ContactsListBox.SelectedItem is not ChannelItem channel)
         {
             MessageBox.Show("Выберите канал в списке (режим «Каналы»).", "Каналы",
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -641,7 +640,7 @@ public partial class MainWindow : Window
 
     private async void RemoveChannelMember_Click(object sender, RoutedEventArgs e)
     {
-        if (ChannelsListBox.SelectedItem is not ChannelItem channel)
+        if (ContactsListBox.SelectedItem is not ChannelItem channel)
         {
             MessageBox.Show("Выберите канал в списке (режим «Каналы»).", "Каналы",
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -726,21 +725,6 @@ public partial class MainWindow : Window
     }
 
     // ---------- Каналы: переписка и история ----------
-
-    private async void ChannelsListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (ChannelsListBox.SelectedItem is not ChannelItem channel) return;
-        _currentChannel = channel;
-        _currentContactId = -1;
-        channel.UnreadCount = 0;
-
-        if (!_allChannelMessages.ContainsKey(channel.Id))
-            _allChannelMessages[channel.Id] = new ObservableCollection<DialogMessage>();
-        MessagesListBox.ItemsSource = _allChannelMessages[channel.Id];
-
-        await CacheChannelMemberNamesAsync(channel.Id);
-        await EnsureChannelHistoryAsync(channel.Id);
-    }
 
     private async Task CacheChannelMemberNamesAsync(string channelId)
     {
@@ -886,7 +870,7 @@ public partial class MainWindow : Window
                 AddChannelMessage(msg.ChannelId, dm);
 
                 // счётчик непрочитанных канала
-                if (_currentChannel?.Id != msg.ChannelId || ListModeComboBox.SelectedIndex != 1)
+                if (_currentChannel?.Id != msg.ChannelId || _currentChannel == null)
                 {
                     var channelItem = _channels.FirstOrDefault(c => c.Id == msg.ChannelId);
                     if (channelItem != null) channelItem.UnreadCount++;
@@ -1083,7 +1067,7 @@ public partial class MainWindow : Window
 
     private string ResolveSenderName(DialogMessage msg)
     {
-        if (ListModeComboBox.SelectedIndex == 1 && _currentChannel != null)
+        if (_currentChannel != null && _currentChannel != null)
             return GetChannelMemberName(_currentChannel.Id, msg.SenderId);
         var contact = _contacts.FirstOrDefault(c => c.Id == msg.SenderId);
         return contact != null ? contact.RawName : $"User {msg.SenderId}";
@@ -1179,7 +1163,7 @@ public partial class MainWindow : Window
             cm.PlacementTarget is ListBoxItem item && item.DataContext is DialogMessage msg)
         {
             // редактирование — только свои текстовые сообщения Direct-чатов
-            if (!msg.IsOutgoing || msg.ContentType != "Text" || ListModeComboBox.SelectedIndex == 1)
+            if (!msg.IsOutgoing || msg.ContentType != "Text" || _currentChannel != null)
             {
                 MessageBox.Show("Изменять можно только свои текстовые сообщения в личных чатах.",
                     "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1279,62 +1263,99 @@ public partial class MainWindow : Window
         });
     }
 
-    // ---------- Клиентский поиск (Фаза D, требование 1.2.3) ----------
+    // ---------- Поиск по выбранному чату (Фаза D, строка поиска) ----------
 
-    private void OpenSearch_Click(object sender, RoutedEventArgs e)
+    private List<DialogMessage> _chatSearchMatches = new();
+    private int _chatSearchIndex = -1;
+
+    /// <summary>Ctrl+F: показать/скрыть строку поиска в текущем чате.</summary>
+    private void ToggleChatSearch_Click(object sender, RoutedEventArgs e)
     {
-        var window = new SearchWindow(SearchLocalMessages, JumpToSearchResult) { Owner = this };
-        window.Show();
+        if (ChatSearchBar.Visibility == Visibility.Visible)
+        {
+            CloseChatSearch();
+            return;
+        }
+        ChatSearchBar.Visibility = Visibility.Visible;
+        ChatSearchBox.Focus();
     }
 
-    /// <summary>Поиск по расшифрованным сообщениям всех загруженных диалогов и каналов (до 100).</summary>
-    private List<SearchResultItem> SearchLocalMessages(string query)
+    private void CloseChatSearch_Click(object sender, RoutedEventArgs e) => CloseChatSearch();
+
+    private void CloseChatSearch()
     {
-        var results = new List<SearchResultItem>();
-
-        foreach (var pair in _allDialogs)
-        {
-            var contact = _contacts.FirstOrDefault(c => c.Id == pair.Key);
-            string source = contact?.RawName ?? $"User {pair.Key}";
-            foreach (var m in pair.Value.Where(m => m.ContentType == "Text" &&
-                     m.Text.Contains(query, StringComparison.OrdinalIgnoreCase)))
-            {
-                if (results.Count >= 100) return results;
-                results.Add(new SearchResultItem(source, false, pair.Key, "", m.Id,
-                    m.Timestamp.ToString("g"), m.Text));
-            }
-        }
-
-        foreach (var pair in _allChannelMessages)
-        {
-            var channel = _channels.FirstOrDefault(c => c.Id == pair.Key);
-            string source = "# " + (channel?.Name ?? pair.Key);
-            foreach (var m in pair.Value.Where(m => m.ContentType == "Text" &&
-                     m.Text.Contains(query, StringComparison.OrdinalIgnoreCase)))
-            {
-                if (results.Count >= 100) return results;
-                results.Add(new SearchResultItem(source, true, 0, pair.Key, m.Id,
-                    m.Timestamp.ToString("g"), m.Text));
-            }
-        }
-
-        return results;
+        ChatSearchBar.Visibility = Visibility.Collapsed;
+        ChatSearchBox.Clear();
+        _chatSearchMatches.Clear();
+        _chatSearchIndex = -1;
+        MessagesListBox.SelectedItem = null;
     }
 
-    private void JumpToSearchResult(SearchResultItem result)
+    private ObservableCollection<DialogMessage>? CurrentChatCollection()
     {
-        if (result.IsChannel)
+        if (_currentChannel != null)
+            return _allChannelMessages.TryGetValue(_currentChannel.Id, out var c) ? c : null;
+        if (_currentContactId > 0)
+            return _allDialogs.TryGetValue(_currentContactId, out var d) ? d : null;
+        return null;
+    }
+
+    private void ChatSearchBox_TextChanged(object sender, TextChangedEventArgs e) => RunChatSearch();
+
+    private void ChatSearchBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
         {
-            ListModeComboBox.SelectedIndex = 1;
-            var channel = _channels.FirstOrDefault(c => c.Id == result.ChannelId);
-            if (channel != null) ChannelsListBox.SelectedItem = channel;
+            NextChatSearchMatch();
+            e.Handled = true;
         }
-        else
+        else if (e.Key == Key.Escape)
         {
-            ListModeComboBox.SelectedIndex = 0;
-            var contact = _contacts.FirstOrDefault(c => c.Id == result.ContactId);
-            if (contact != null) ContactsListBox.SelectedItem = contact;
+            CloseChatSearch();
         }
+    }
+
+    private void RunChatSearch()
+    {
+        _chatSearchMatches.Clear();
+        _chatSearchIndex = -1;
+        MessagesListBox.SelectedItem = null;
+
+        string query = ChatSearchBox.Text.Trim();
+        if (query.Length < 1)
+        {
+            ChatSearchCount.Text = "";
+            return;
+        }
+
+        var collection = CurrentChatCollection();
+        if (collection == null)
+        {
+            ChatSearchCount.Text = "Выберите чат";
+            return;
+        }
+
+        _chatSearchMatches = collection
+            .Where(m => m.ContentType == "Text" && m.Text.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        ChatSearchCount.Text = _chatSearchMatches.Count == 0 ? "Нет совпадений" : $"1/{_chatSearchMatches.Count}";
+        if (_chatSearchMatches.Count > 0) ShowChatSearchMatch(0);
+    }
+
+    private void NextChatSearchMatch()
+    {
+        if (_chatSearchMatches.Count == 0) return;
+        ShowChatSearchMatch((_chatSearchIndex + 1) % _chatSearchMatches.Count);
+    }
+
+    private void ShowChatSearchMatch(int index)
+    {
+        _chatSearchIndex = index;
+        var msg = _chatSearchMatches[index];
+        MessagesListBox.SelectedItem = msg;
+        MessagesListBox.ScrollIntoView(msg);
+        ChatSearchCount.Text = $"{index + 1}/{_chatSearchMatches.Count}";
     }
 
     private static string MapChannelError(string? status) => status switch
@@ -1504,7 +1525,7 @@ public partial class MainWindow : Window
 
     private void UpdateLoadMoreButton()
     {
-        bool hasMore = ListModeComboBox.SelectedIndex == 1
+        bool hasMore = _currentChannel != null
             ? (_currentChannel != null && _channelHasMore.TryGetValue(_currentChannel.Id, out var ch) && ch)
             : (_currentContactId > 0 && _directHasMore.TryGetValue(_currentContactId, out var dh) && dh);
         LoadMoreButton.Visibility = hasMore ? Visibility.Visible : Visibility.Collapsed;
@@ -1512,7 +1533,7 @@ public partial class MainWindow : Window
 
     private async void LoadMore_Click(object sender, RoutedEventArgs e)
     {
-        if (ListModeComboBox.SelectedIndex == 1)
+        if (_currentChannel != null)
         {
             if (_currentChannel == null) return;
             await LoadChannelHistoryPageAsync(_currentChannel.Id, loadMore: true);
@@ -1606,7 +1627,7 @@ public partial class MainWindow : Window
                 AddMessage(msg.SenderId, incoming);
 
                 // счётчик непрочитанных: сообщение пришло не в открытый диалог
-                if (_currentContactId != msg.SenderId || ListModeComboBox.SelectedIndex != 0)
+                if (_currentChannel != null || _currentContactId != msg.SenderId)
                 {
                     var contact = _contacts.FirstOrDefault(c => c.Id == msg.SenderId);
                     if (contact != null) contact.UnreadCount++;
@@ -1695,6 +1716,24 @@ public partial class MainWindow : Window
 
     private async void ContactsListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        // единый список: выбор канала
+        if (ContactsListBox.SelectedItem is ChannelItem channel)
+        {
+            _currentChannel = channel;
+            _currentContactId = -1;
+            channel.UnreadCount = 0;
+
+            if (!_allChannelMessages.ContainsKey(channel.Id))
+                _allChannelMessages[channel.Id] = new ObservableCollection<DialogMessage>();
+            MessagesListBox.ItemsSource = _allChannelMessages[channel.Id];
+
+            await CacheChannelMemberNamesAsync(channel.Id);
+            await EnsureChannelHistoryAsync(channel.Id);
+            UpdateLoadMoreButton();
+            return;
+        }
+
+        // выбор контакта
         if (ContactsListBox.SelectedItem is ContactItem contact)
         {
             _currentChannel = null;
@@ -1718,7 +1757,7 @@ public partial class MainWindow : Window
     private async void SendButton_Click(object sender, RoutedEventArgs e)
     {
         // режим редактирования: перешифровка текста тем же сессионным ключом
-        if (_editingMessageId != null && ListModeComboBox.SelectedIndex != 1)
+        if (_editingMessageId != null && _currentChannel == null)
         {
             string editText = MessageTextBox.Text.Trim();
             if (string.IsNullOrEmpty(editText)) return;
@@ -1728,7 +1767,7 @@ public partial class MainWindow : Window
         }
 
         // режим «Каналы»: сообщение уходит в канал через групповой ключ
-        if (ListModeComboBox.SelectedIndex == 1)
+        if (_currentChannel != null)
         {
             if (_currentChannel == null)
             {
@@ -1823,7 +1862,7 @@ public partial class MainWindow : Window
     private async void AttachFileButton_Click(object sender, RoutedEventArgs e)
     {
         // режим «Каналы»: файл шифруется MessageKey из ratchet и уходит в канал
-        if (ListModeComboBox.SelectedIndex == 1)
+        if (_currentChannel != null)
         {
             await SendChannelFileAsync();
             return;
