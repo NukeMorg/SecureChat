@@ -1099,10 +1099,16 @@ public partial class MainWindow : Window
         MessageTextBox.Focus();
     }
 
+    /// <summary>Правый клик по строке сообщения — выбираем её, чтобы меню работало с SelectedItem.</summary>
+    private void MessageRow_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is ListBoxItem item && item.DataContext is DialogMessage)
+            MessagesListBox.SelectedItem = item.DataContext;
+    }
+
     private void ReplyToMessage_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is MenuItem mi && mi.Parent is ContextMenu cm &&
-            cm.PlacementTarget is ListBoxItem item && item.DataContext is DialogMessage msg)
+        if (MessagesListBox.SelectedItem is DialogMessage msg)
             StartReply(msg);
     }
 
@@ -1174,8 +1180,7 @@ public partial class MainWindow : Window
 
     private void EditMessage_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is MenuItem mi && mi.Parent is ContextMenu cm &&
-            cm.PlacementTarget is ListBoxItem item && item.DataContext is DialogMessage msg)
+        if (MessagesListBox.SelectedItem is DialogMessage msg)
         {
             // редактирование — только свои текстовые сообщения Direct-чатов
             if (!msg.IsOutgoing || msg.ContentType != "Text" || _currentChannel != null)
@@ -1202,8 +1207,7 @@ public partial class MainWindow : Window
 
     private async void DeleteMessage_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is MenuItem mi && mi.Parent is ContextMenu cm &&
-            cm.PlacementTarget is ListBoxItem item && item.DataContext is DialogMessage msg)
+        if (MessagesListBox.SelectedItem is DialogMessage msg)
         {
             if (msg.IsOutgoing || _role == "Manager" || _role == "Admin")
             {

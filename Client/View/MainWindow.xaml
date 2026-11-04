@@ -21,6 +21,13 @@
         <conv:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
         <conv:FileNameConverter x:Key="FileNameConverter"/>
 
+        <!-- Контекстное меню строки сообщения: объявлено в ресурсах (корректная компиляция событий) -->
+        <ContextMenu x:Key="MessageRowMenu">
+            <MenuItem Header="Ответить" Click="ReplyToMessage_Click"/>
+            <MenuItem Header="Изменить..." Click="EditMessage_Click"/>
+            <MenuItem Header="Удалить" Click="DeleteMessage_Click"/>
+        </ContextMenu>
+
         <!-- Единый список: шаблон контакта -->
         <DataTemplate x:Key="ContactTemplate">
             <Border Background="{DynamicResource ContactItemBackground}" CornerRadius="6" Margin="2" Padding="8">
@@ -217,15 +224,6 @@
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                                 <Setter Property="Background" Value="Transparent"/>
-                                <Setter Property="ContextMenu">
-                                    <Setter.Value>
-                                        <ContextMenu>
-                                            <MenuItem Header="Ответить" Click="ReplyToMessage_Click"/>
-                                            <MenuItem Header="Изменить..." Click="EditMessage_Click"/>
-                                            <MenuItem Header="Удалить" Click="DeleteMessage_Click"/>
-                                        </ContextMenu>
-                                    </Setter.Value>
-                                </Setter>
                             </Style>
                         </ListBox.ItemContainerStyle>
                     </ListBox>
@@ -271,15 +269,10 @@
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                                 <Setter Property="Background" Value="Transparent"/>
-                                <Setter Property="ContextMenu">
-                                    <Setter.Value>
-                                        <ContextMenu>
-                                            <MenuItem Header="Ответить" Click="ReplyToMessage_Click"/>
-                                            <MenuItem Header="Изменить..." Click="EditMessage_Click"/>
-                                            <MenuItem Header="Удалить" Click="DeleteMessage_Click"/>
-                                        </ContextMenu>
-                                    </Setter.Value>
-                                </Setter>
+                                <!-- меню объявлено в ресурсах окна: события внутри Setter.Value
+                                     компилируются некорректно (IStyleConnector → InvalidCastException) -->
+                                <Setter Property="ContextMenu" Value="{StaticResource MessageRowMenu}"/>
+                                <EventSetter Event="PreviewMouseRightButtonDown" Handler="MessageRow_PreviewMouseRightButtonDown"/>
                             </Style>
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
