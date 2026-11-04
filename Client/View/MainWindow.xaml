@@ -136,6 +136,11 @@
                 <MenuItem Header="Журнал аудита..." Click="AuditLog_Click"/>
             </MenuItem>
 
+            <!-- Экспорт (только клиент, расшифрованные данные текущего чата) -->
+            <MenuItem Header="Экспорт">
+                <MenuItem Header="Текущий чат в Excel..." Click="ExportExcel_Click"/>
+            </MenuItem>
+
             <!-- Каналы (создание и участники — только HR/Admin) -->
             <MenuItem Header="Каналы">
                 <MenuItem Header="Создать канал..." x:Name="ChannelCreateMenuItem" Click="CreateChannel_Click" Visibility="Collapsed"/>
