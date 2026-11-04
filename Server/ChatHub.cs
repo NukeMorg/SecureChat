@@ -616,6 +616,64 @@ public class ChatHub : Hub
             "RotateGroupKey", uid, p.ChannelId, p.Version);
     }
 
+    /// <summary>
+    /// Сообщение канала: сохранение и ретрансляция в SignalR-группу.
+    /// Сервер видит только шифртекст (AES-GCM на MessageKey из ratchet).
+    /// </summary>
+    public async Task SendChannelMessage(SendChannelMessagePayload? p)
+    {
+        if (UserId is not int senderId || p == null) return;
+        if (string.IsNullOrEmpty(p.ChannelId) || string.IsNullOrEmpty(p.MessageId) ||
+            p.ChainIteration < 0 || p.EncryptedData == null) return;
+        if (!_db.IsChannelMember(p.ChannelId, senderId)) return;
+
+        int maxCipherBase64 = p.ContentType == "File" ? 14_000_000 : 16_500;
+        if (string.IsNullOrEmpty(p.EncryptedData.Ciphertext) || p.EncryptedData.Ciphertext.Length > maxCipherBase64)
+        {
+            _log.Warning("Channel message rejected: size limit channelId={ChannelId} messageId={MessageId}",
+                p.ChannelId, p.MessageId);
+            await Respond("Error", new SimpleStatusPayload { Status = "MessageRejected" });
+            return;
+        }
+
+        _db.SaveChannelMessage(p.MessageId, p.ChannelId, senderId,
+            p.EncryptedData.Nonce, p.EncryptedData.Ciphertext, p.EncryptedData.Tag,
+            p.ContentType, p.FileName, p.FileSize, p.FileTransferId, p.ChainIteration);
+
+        await Clients.OthersInGroup(p.ChannelId).SendAsync("IncomingChannelMessage",
+            new IncomingChannelMessagePayload
+            {
+                ChannelId = p.ChannelId,
+                SenderId = senderId,
+                MessageId = p.MessageId,
+                ChainIteration = p.ChainIteration,
+                EncryptedData = p.EncryptedData,
+                ContentType = p.ContentType,
+                FileName = p.FileName,
+                FileSize = p.FileSize,
+                Timestamp = DateTime.UtcNow.ToString("o")
+            });
+
+        _log.Information("Channel message channelId={ChannelId} senderId={SenderId} type={ContentType} size={Size}B messageId={MessageId}",
+            p.ChannelId, senderId, p.ContentType, p.FileSize, p.MessageId);
+    }
+
+    /// <summary>История канала: курсорная пагинация, до 50 сообщений старее курсора.</summary>
+    public Task<ChannelHistoryResponsePayload?> GetChannelHistory(GetChannelHistoryPayload? p)
+    {
+        if (UserId is not int uid || p == null || !_db.IsChannelMember(p.ChannelId, uid))
+            return Task.FromResult<ChannelHistoryResponsePayload?>(null);
+
+        int limit = p.Limit is > 0 and <= 50 ? p.Limit : 50;
+        var (messages, hasMore) = _db.GetChannelHistoryPage(p.ChannelId, p.BeforeTimestamp, limit);
+        return Task.FromResult<ChannelHistoryResponsePayload?>(new ChannelHistoryResponsePayload
+        {
+            ChannelId = p.ChannelId,
+            Messages = messages,
+            HasMore = hasMore
+        });
+    }
+
     // ---------- Direct-чаты ----------
 
     public async Task SendMessage(SendMessagePayload? p)

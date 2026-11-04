@@ -384,18 +384,24 @@ public partial class MainWindow : Window
             return;
         }
 
-        string? role = ShowInputDialog("Роль: Admin / HR / Employee", "Employee");
+        string? role = ShowInputDialog("Роль: Admin / Менеджер / Employee", "Employee");
         if (string.IsNullOrWhiteSpace(role)) return;
-        if (role is not ("Admin" or "HR" or "Employee"))
+        // «Менеджер» — отображаемое имя роли HR (внутренний код протокола — HR)
+        string normalized = role switch
         {
-            MessageBox.Show("Недопустимая роль. Доступны: Admin, HR, Employee.",
+            "Менеджер" or "Manager" => "HR",
+            _ => role
+        };
+        if (normalized is not ("Admin" or "HR" or "Employee"))
+        {
+            MessageBox.Show("Недопустимая роль. Доступны: Admin, Менеджер, Employee.",
                 "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
 
-        var resp = await _network.ChangeRoleAsync(new ChangeRolePayload { TargetId = contact.Id, Role = role });
+        var resp = await _network.ChangeRoleAsync(new ChangeRolePayload { TargetId = contact.Id, Role = normalized });
         if (resp?.Status == "Ok")
-            MessageBox.Show($"Роль {contact.Name} (ID: {contact.Id}) изменена на {role}.",
+            MessageBox.Show($"Роль {contact.Name} (ID: {contact.Id}) изменена на {DisplayRole(normalized)}.",
                 "Администрирование", MessageBoxButton.OK, MessageBoxImage.Information);
         else
             MessageBox.Show($"Не удалось сменить роль: {MapAdminError(resp?.Status)}",
@@ -407,6 +413,9 @@ public partial class MainWindow : Window
         var window = new AuditLogWindow(_network) { Owner = this };
         window.Show();
     }
+
+    /// <summary>Отображаемое имя роли: HR → «Менеджер» (внутренний код — HR).</summary>
+    private static string DisplayRole(string role) => RoleDisplay.Display(role);
 
     /// <summary>Нейтральные тексты результатов админ-операций.</summary>
     private static string MapAdminError(string? status) => status switch
@@ -746,6 +755,22 @@ public partial class MainWindow : Window
 
         foreach (var m in messages)
         {
+            if (m.ContentType == "File")
+            {
+                // в истории файл отображается именем (авто-загрузка — только для живых сообщений)
+                AddChannelMessage(channelId, new DialogMessage
+                {
+                    Id = m.MessageId,
+                    SenderId = m.SenderId,
+                    FilePath = m.FileName ?? "file",
+                    ContentType = "File",
+                    Status = "",
+                    IsOutgoing = m.SenderId == _clientId,
+                    SenderName = m.SenderId == _clientId ? "" : GetChannelMemberName(channelId, m.SenderId),
+                    Timestamp = DateTime.Parse(m.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                });
+                continue;
+            }
             if (m.ContentType != "Text" || string.IsNullOrEmpty(m.Ciphertext)) continue;
             byte[]? key = _channelCrypto.DeriveMessageKeyAt(channelId, m.SenderId, m.ChainIteration);
             if (key == null)
@@ -798,6 +823,11 @@ public partial class MainWindow : Window
             {
                 Log.Warning("Channel message dropped (no key or replay) channelId={ChannelId} senderId={SenderId} iteration={Iteration}",
                     msg.ChannelId, msg.SenderId, msg.ChainIteration);
+                return;
+            }
+            if (msg.ContentType == "File")
+            {
+                ReceiveChannelFile(msg, key);
                 return;
             }
             if (msg.ContentType != "Text" || msg.EncryptedData == null) return;
@@ -872,6 +902,116 @@ public partial class MainWindow : Window
 
         Log.Information("Channel message sent channelId={ChannelId} length={Length} iteration={Iteration} messageId={MessageId}",
             channelId, text.Length, iteration, msgId);
+    }
+
+    /// <summary>Отправка файла в канал: ≤10 МБ, шифрование MessageKey из ratchet.</summary>
+    private async Task SendChannelFileAsync()
+    {
+        if (_currentChannel == null)
+        {
+            MessageBox.Show("Выберите канал", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var next = _channelCrypto.GetNextMessageKey(_currentChannel.Id, _clientId);
+        if (next == null)
+        {
+            MessageBox.Show("Ключ канала ещё не получен — дождитесь доставки от владельца.",
+                "Каналы", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.OpenFileDialog();
+        if (dlg.ShowDialog() != true) return;
+
+        var file = new FileInfo(dlg.FileName);
+        if (file.Length > 10 * 1024 * 1024)
+        {
+            MessageBox.Show("Файл больше 10 МБ.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        try
+        {
+            var (messageKey, iteration) = next.Value;
+            byte[] fileData = await File.ReadAllBytesAsync(dlg.FileName);
+            var (ct, nonce, tag) = _crypto.AesGcmEncrypt(messageKey, fileData);
+            string msgId = Guid.NewGuid().ToString();
+            string fileName = Path.GetFileName(dlg.FileName);
+
+            AddChannelMessage(_currentChannel.Id, new DialogMessage
+            {
+                Id = msgId,
+                SenderId = _clientId,
+                FilePath = fileName,
+                ContentType = "File",
+                Status = "",
+                IsOutgoing = true,
+                Timestamp = DateTime.Now
+            });
+
+            await _network.SendChannelMessageAsync(new SendChannelMessagePayload
+            {
+                ChannelId = _currentChannel.Id,
+                MessageId = msgId,
+                ChainIteration = iteration,
+                EncryptedData = new EncryptedData
+                {
+                    Nonce = Convert.ToBase64String(nonce),
+                    Ciphertext = Convert.ToBase64String(ct),
+                    Tag = Convert.ToBase64String(tag)
+                },
+                ContentType = "File",
+                FileName = fileName,
+                FileSize = fileData.Length,
+                FileTransferId = Guid.NewGuid().ToString()
+            });
+
+            Log.Information("Channel file sent channelId={ChannelId} {FileName} ({Size}B) iteration={Iteration} messageId={MessageId}",
+                _currentChannel.Id, fileName, fileData.Length, iteration, msgId);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to send channel file channelId={ChannelId}", _currentChannel.Id);
+            MessageBox.Show($"Не удалось отправить файл: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>Приём файла из канала: расшифровка и сохранение в Downloads.</summary>
+    private void ReceiveChannelFile(IncomingChannelMessagePayload msg, byte[] messageKey)
+    {
+        try
+        {
+            byte[] plain = _crypto.AesGcmDecrypt(messageKey,
+                Convert.FromBase64String(msg.EncryptedData!.Nonce),
+                Convert.FromBase64String(msg.EncryptedData.Ciphertext),
+                Convert.FromBase64String(msg.EncryptedData.Tag));
+
+            string downloads = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) + "\\Downloads\\";
+            Directory.CreateDirectory(downloads);
+            string path = Path.Combine(downloads, msg.FileName ?? "received_file");
+            File.WriteAllBytes(path, plain);
+
+            AddChannelMessage(msg.ChannelId, new DialogMessage
+            {
+                Id = msg.MessageId,
+                SenderId = msg.SenderId,
+                FilePath = path,
+                ContentType = "File",
+                Status = "",
+                IsOutgoing = false,
+                SenderName = GetChannelMemberName(msg.ChannelId, msg.SenderId),
+                Timestamp = DateTime.Parse(msg.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            });
+
+            Log.Information("Channel file received {FileName} ({Size}B) from userId={SenderId} channelId={ChannelId}",
+                msg.FileName, plain.Length, msg.SenderId, msg.ChannelId);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Channel file decrypt failed channelId={ChannelId} messageId={MessageId}",
+                msg.ChannelId, msg.MessageId);
+        }
     }
 
     private static string MapChannelError(string? status) => status switch
@@ -1271,6 +1411,13 @@ public partial class MainWindow : Window
 
     private async void AttachFileButton_Click(object sender, RoutedEventArgs e)
     {
+        // режим «Каналы»: файл шифруется MessageKey из ratchet и уходит в канал
+        if (ListModeComboBox.SelectedIndex == 1)
+        {
+            await SendChannelFileAsync();
+            return;
+        }
+
         if (_currentContactId <= 0) { MessageBox.Show("Выберите получателя", "Информация", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         try
         {

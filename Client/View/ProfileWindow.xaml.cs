@@ -1,6 +1,7 @@
 ﻿using System.IO;
 using System.Windows;
 using System.Windows.Media.Imaging;
+using SecureChat.Client.Services;
 using SecureChat.Core;
 
 namespace SecureChat.Client.View;
@@ -15,7 +16,7 @@ public partial class ProfileWindow : Window
         InitializeComponent();
 
         NameText.Text = profile.UserName;
-        IdRoleText.Text = $"ID: {profile.UserId} · Роль: {profile.Role}";
+        IdRoleText.Text = $"ID: {profile.UserId} · Роль: {RoleDisplay.Display(profile.Role)}";
         OnlineText.Text = profile.IsOnline ? "в сети" : "не в сети";
         StatusTextBlock.Text = string.IsNullOrEmpty(profile.Status) ? "Статус не задан." : profile.Status;
 
