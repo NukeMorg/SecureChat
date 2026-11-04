@@ -1,7 +1,6 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
-using System.Net.Mail;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -155,21 +154,13 @@ public partial class LoginWindow : Window
     private void ShowErrorPopup(string message) =>
         MessageBox.Show(message, "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
 
-    private static bool IsValidEmail(string email)
-    {
-        if (string.IsNullOrWhiteSpace(email)) return false;
-        try
-        {
-            var addr = new MailAddress(email);
-            return addr.Address == email.Trim();
-        }
-        catch { return false; }
-    }
+    private static bool IsValidEmail(string email) =>
+        Validators.IsValidEmail(email);
 
     private static string? ValidateEmail(string email)
     {
-        if (string.IsNullOrWhiteSpace(email)) return "Введите email. Пример: example@gmail.com";
-        if (!IsValidEmail(email)) return "Неверный формат почты. Пример: example@gmail.com";
+        if (string.IsNullOrWhiteSpace(email)) return "Введите email. Пример: example@company.com";
+        if (!IsValidEmail(email)) return "Допустима только корпоративная почта. Пример: example@company.com";
         return null;
     }
 
@@ -467,6 +458,9 @@ public partial class LoginWindow : Window
                     "InvalidCode" => "Неверный код подтверждения.",
                     "CodeExpired" => "Срок действия кода истёк. Запросите новый.",
                     "UserExists" => "Пользователь с такой почтой уже существует.",
+                    "InvalidEmail" => "Допустима только корпоративная почта @company.com.",
+                    "WeakPassword" => "Пароль: минимум 8 символов, хотя бы одна буква и одна цифра.",
+                    "InvalidUserName" => "Некорректное имя пользователя.",
                     _ => $"Ошибка регистрации: {resp.Status}"
                 });
                 SubmitButton.IsEnabled = true;

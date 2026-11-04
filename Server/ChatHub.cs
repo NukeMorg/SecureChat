@@ -38,7 +38,7 @@ public class ChatHub : Hub
 
     public async Task SendEmailCode(SendEmailCodePayload? p)
     {
-        if (p == null || string.IsNullOrWhiteSpace(p.Email) || !p.Email.Contains('@'))
+        if (p == null || !Validators.IsValidEmail(p.Email))
         {
             await Respond("SendEmailCodeResponse",
                 new SendEmailCodeResponsePayload { Status = "InvalidEmail", Message = "Некорректный адрес почты." });
@@ -73,7 +73,8 @@ public class ChatHub : Hub
 
     public async Task Login(LoginPayload? p)
     {
-        if (p == null || string.IsNullOrWhiteSpace(p.Email))
+        // нейтральный ответ без раскрытия причины (анти-enumeration)
+        if (p == null || !Validators.IsValidEmail(p.Email))
         {
             await Respond("LoginResponse", new LoginResponsePayload { Status = "InvalidCredentials" });
             return;
@@ -114,9 +115,19 @@ public class ChatHub : Hub
 
     public async Task RegisterAccount(RegisterAccountPayload? p)
     {
-        if (p == null || string.IsNullOrWhiteSpace(p.Email))
+        if (p == null || !Validators.IsValidEmail(p.Email))
         {
-            await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "Error" });
+            await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "InvalidEmail" });
+            return;
+        }
+        if (!Validators.IsValidPassword(p.Password))
+        {
+            await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "WeakPassword" });
+            return;
+        }
+        if (!Validators.IsValidUserName(p.UserName))
+        {
+            await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "InvalidUserName" });
             return;
         }
 
