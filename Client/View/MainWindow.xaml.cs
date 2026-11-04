@@ -86,7 +86,7 @@ public partial class MainWindow : Window
         _network.OnError += err =>
         {
             Log.Error("Network error: {Error}", err);
-            Dispatcher.Invoke(() => MessageBox.Show($"Ошибка: {err}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error));
+            Dispatcher.Invoke(() => MessageBox.Show(MapErrorText(err), "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error));
         };
         _network.OnUserProfileUpdated += OnUserProfileUpdated;
         _network.OnUserInfoResponse += OnUserInfoResponse;
@@ -116,6 +116,15 @@ public partial class MainWindow : Window
 
         this.Loaded += async (s, e) => { await _network.GetContactsAsync(); };
     }
+
+    /// <summary>Нейтральные тексты ошибок сервера: без стектрейсов и внутренних деталей (требование 1.4.3).</summary>
+    private static string MapErrorText(string errorCode) => errorCode switch
+    {
+        "MessageRejected" => "Сообщение отклонено сервером: проверьте размер и формат.",
+        "InvalidUserName" => "Некорректное имя пользователя (1–100 символов).",
+        "UnknownClient" => "Сессия недействительна. Выполните вход заново.",
+        _ => $"Ошибка: {errorCode}"
+    };
 
     private void InitCommon()
     {
