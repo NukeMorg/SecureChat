@@ -12,6 +12,7 @@
         <KeyBinding Command="{x:Static local:MainWindow.ExitCommand}" Gesture="Ctrl+Q"/>
         <KeyBinding Command="{x:Static local:MainWindow.ToggleThemeCommand}" Gesture="Ctrl+T"/>
         <KeyBinding Command="{x:Static local:MainWindow.ChangeNameCommand}" Gesture="Ctrl+N"/>
+        <KeyBinding Command="{x:Static local:MainWindow.SearchMessagesCommand}" Gesture="Ctrl+F"/>
     </Window.InputBindings>
 
     <Window.Resources>
@@ -49,6 +50,8 @@
 
             <!-- Вид -->
             <MenuItem Header="Вид">
+                <MenuItem Header="Поиск по сообщениям..." Command="{x:Static local:MainWindow.SearchMessagesCommand}" InputGestureText="Ctrl+F"/>
+                <Separator/>
                 <MenuItem Header="Сменить тему" Command="{x:Static local:MainWindow.ToggleThemeCommand}" InputGestureText="Ctrl+T"/>
             </MenuItem>
 

@@ -28,6 +28,8 @@ public partial class MainWindow : Window
         "Сменить тему", nameof(ToggleThemeCommand), typeof(MainWindow));
     public static readonly RoutedUICommand ChangeNameCommand = new(
         "Изменить имя", nameof(ChangeNameCommand), typeof(MainWindow));
+    public static readonly RoutedUICommand SearchMessagesCommand = new(
+        "Поиск по сообщениям", nameof(SearchMessagesCommand), typeof(MainWindow));
 
     private static readonly ILogger Log = Serilog.Log.ForContext<MainWindow>();
 
@@ -158,6 +160,7 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(ExitCommand, (s, e) => Application.Current.Shutdown()));
         CommandBindings.Add(new CommandBinding(ToggleThemeCommand, (s, e) => ToggleTheme_Click(s, e)));
         CommandBindings.Add(new CommandBinding(ChangeNameCommand, (s, e) => ChangeName_Click(s, e)));
+        CommandBindings.Add(new CommandBinding(SearchMessagesCommand, (s, e) => OpenSearch_Click(s, e)));
         _contactsView = CollectionViewSource.GetDefaultView(_contacts);
         ContactsListBox.ItemsSource = _contactsView;
     }
@@ -1261,6 +1264,64 @@ public partial class MainWindow : Window
             }
             MessagesListBox.Items.Refresh();
         });
+    }
+
+    // ---------- Клиентский поиск (Фаза D, требование 1.2.3) ----------
+
+    private void OpenSearch_Click(object sender, RoutedEventArgs e)
+    {
+        var window = new SearchWindow(SearchLocalMessages, JumpToSearchResult) { Owner = this };
+        window.Show();
+    }
+
+    /// <summary>Поиск по расшифрованным сообщениям всех загруженных диалогов и каналов (до 100).</summary>
+    private List<SearchResultItem> SearchLocalMessages(string query)
+    {
+        var results = new List<SearchResultItem>();
+
+        foreach (var pair in _allDialogs)
+        {
+            var contact = _contacts.FirstOrDefault(c => c.Id == pair.Key);
+            string source = contact?.RawName ?? $"User {pair.Key}";
+            foreach (var m in pair.Value.Where(m => m.ContentType == "Text" &&
+                     m.Text.Contains(query, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (results.Count >= 100) return results;
+                results.Add(new SearchResultItem(source, false, pair.Key, "", m.Id,
+                    m.Timestamp.ToString("g"), m.Text));
+            }
+        }
+
+        foreach (var pair in _allChannelMessages)
+        {
+            var channel = _channels.FirstOrDefault(c => c.Id == pair.Key);
+            string source = "# " + (channel?.Name ?? pair.Key);
+            foreach (var m in pair.Value.Where(m => m.ContentType == "Text" &&
+                     m.Text.Contains(query, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (results.Count >= 100) return results;
+                results.Add(new SearchResultItem(source, true, 0, pair.Key, m.Id,
+                    m.Timestamp.ToString("g"), m.Text));
+            }
+        }
+
+        return results;
+    }
+
+    private void JumpToSearchResult(SearchResultItem result)
+    {
+        if (result.IsChannel)
+        {
+            ListModeComboBox.SelectedIndex = 1;
+            var channel = _channels.FirstOrDefault(c => c.Id == result.ChannelId);
+            if (channel != null) ChannelsListBox.SelectedItem = channel;
+        }
+        else
+        {
+            ListModeComboBox.SelectedIndex = 0;
+            var contact = _contacts.FirstOrDefault(c => c.Id == result.ContactId);
+            if (contact != null) ContactsListBox.SelectedItem = contact;
+        }
     }
 
     private static string MapChannelError(string? status) => status switch
