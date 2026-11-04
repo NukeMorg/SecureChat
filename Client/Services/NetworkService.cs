@@ -1,20 +1,22 @@
 ﻿using System;
-using System.IO;
-using System.Net.WebSockets;
-using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.SignalR.Client;
 using SecureChat.Core;
 using Serilog;
 
 namespace SecureChat.Client.Services;
 
+/// <summary>
+/// Транспортный слой клиента на SignalR HubConnection.
+/// Наружу выставлен прежний контракт (события + SendAsync с конвертом {Type, Payload}),
+/// поэтому окна (MainWindow/LoginWindow) не зависят от транспорта.
+/// Имена хаб-методов совпадают со старыми значениями Type.
+/// </summary>
 public class NetworkService
 {
-    private ClientWebSocket? _ws;
-    private CancellationTokenSource? _cts;
-    private volatile bool _isDisconnecting;
+    private HubConnection? _hub;
+    private HelloPayload? _lastHello;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     private static readonly ILogger Log = Serilog.Log.ForContext<NetworkService>();
@@ -37,60 +39,77 @@ public class NetworkService
     public event Action<int>? OnUserOnline;
     public event Action<int>? OnUserOffline;
 
-    public bool IsConnected => _ws != null && _ws.State == WebSocketState.Open;
+    public bool IsConnected => _hub?.State == HubConnectionState.Connected;
 
     public async Task ConnectAsync(string serverUrl)
     {
         if (IsConnected) return;
 
         Disconnect();
-        _isDisconnecting = false;
-        _cts = new CancellationTokenSource();
-
-        string normalizedUrl = serverUrl.Trim();
-        if (!normalizedUrl.StartsWith("ws://") && !normalizedUrl.StartsWith("wss://"))
-            normalizedUrl = "ws://" + normalizedUrl;
-        if (!normalizedUrl.EndsWith("/"))
-            normalizedUrl += "/";
+        string hubUrl = NormalizeHubUrl(serverUrl);
 
         try
         {
-            Log.Information("Подключение к {Url}", normalizedUrl);
-            _ws = new ClientWebSocket();
-            await _ws.ConnectAsync(new Uri(normalizedUrl), _cts.Token);
-            Log.Information("Соединение установлено {Url}", normalizedUrl);
+            Log.Information("Подключение к {Url}", hubUrl);
+            _hub = new HubConnectionBuilder()
+                .WithUrl(hubUrl)
+                .WithAutomaticReconnect(new[]
+                {
+                    TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4),
+                    TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(16), TimeSpan.FromSeconds(30)
+                })
+                .Build();
+
+            RegisterHandlers();
+            _hub.Reconnected += OnHubReconnected;
+            _hub.Closed += OnHubClosed;
+
+            await _hub.StartAsync();
+            Log.Information("Соединение установлено {Url}", hubUrl);
             OnConnected?.Invoke();
-            _ = Task.Run(ReadLoop);
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Ошибка подключения к {Url}", normalizedUrl);
-            OnError?.Invoke($"Ошибка подключения к {normalizedUrl}: {ex.Message}");
+            Log.Error(ex, "Ошибка подключения к {Url}", hubUrl);
+            OnError?.Invoke($"Ошибка подключения к {hubUrl}: {ex.Message}");
             Disconnect();
             throw;
         }
     }
 
+    /// <summary>
+    /// Совместимость со старым протоколом: принимает конверт {Type, Payload}
+    /// и вызывает одноимённый хаб-метод. Позволяет окнам не знать о SignalR.
+    /// </summary>
     public async Task SendAsync(object message)
     {
-        if (_ws == null || _ws.State != WebSocketState.Open)
+        var hub = _hub;
+        if (hub == null || hub.State != HubConnectionState.Connected)
         {
-            if (!_isDisconnecting) OnError?.Invoke("Нет подключения к серверу");
+            OnError?.Invoke("Нет подключения к серверу");
             return;
         }
 
         await _sendLock.WaitAsync();
         try
         {
-            if (_ws.State != WebSocketState.Open) return;
-            string json = JsonSerializer.Serialize(message);
-            byte[] bytes = Encoding.UTF8.GetBytes(json);
-            await _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+            if (message == null) return;
+            Type msgType = message.GetType();
+            string? name = msgType.GetProperty("Type")?.GetValue(message) as string;
+            if (string.IsNullOrEmpty(name)) return;
+            object? payload = msgType.GetProperty("Payload")?.GetValue(message);
+
+            if (payload != null)
+                await hub.InvokeAsync(name, payload);
+            else
+                await hub.InvokeAsync(name);
+
+            if (name == "Hello" && payload is HelloPayload hello) _lastHello = hello;
         }
         catch (Exception ex)
         {
-            if (!_isDisconnecting) Log.Error(ex, "Ошибка отправки сообщения");
-            if (!_isDisconnecting) OnError?.Invoke($"Ошибка отправки: {ex.Message}");
+            Log.Error(ex, "Ошибка отправки сообщения");
+            OnError?.Invoke($"Ошибка отправки: {ex.Message}");
         }
         finally
         {
@@ -98,102 +117,80 @@ public class NetworkService
         }
     }
 
-    private async Task ReadLoop()
+    private void RegisterHandlers()
     {
-        byte[] buffer = new byte[64 * 1024];
-        try
+        var hub = _hub!;
+        hub.On<SendEmailCodeResponsePayload>("SendEmailCodeResponse", p => OnSendEmailCodeResponse?.Invoke(p));
+        hub.On<LoginResponsePayload>("LoginResponse", p => OnLoginResponse?.Invoke(p));
+        hub.On<RegisterAccountResponsePayload>("RegisterAccountResponse", p => OnRegisterAccountResponse?.Invoke(p));
+        hub.On<HelloResponsePayload>("HelloResponse", p => OnHelloResponse?.Invoke(p));
+        hub.On<IncomingMessagePayload>("IncomingMessage", p => OnIncomingMessage?.Invoke(p));
+        hub.On<DeliveryStatusPayload>("DeliveryStatus", p => OnDeliveryStatus?.Invoke(p));
+        hub.On<PublicKeyResponsePayload>("PublicKeyResponse", p => OnPublicKeyResponse?.Invoke(p));
+        hub.On<ContactListPayload>("ContactList", p => OnContactList?.Invoke(p));
+        hub.On<UserProfileUpdatedPayload>("UserProfileUpdated", p => OnUserProfileUpdated?.Invoke(p));
+        hub.On<UserInfoResponsePayload>("UserInfoResponse", p => OnUserInfoResponse?.Invoke(p));
+        hub.On<HistoryResponsePayload>("HistoryResponse", p => OnHistoryResponse?.Invoke(p));
+        hub.On<AddContactResponsePayload>("AddContactResponse", p => OnAddContactResponse?.Invoke(p));
+        hub.On<OnlineStatusPayload>("UserOnline", p => OnUserOnline?.Invoke(p.UserId));
+        hub.On<OnlineStatusPayload>("UserOffline", p => OnUserOffline?.Invoke(p.UserId));
+        hub.On<SimpleStatusPayload>("Error", p => OnError?.Invoke(p?.Status ?? "UnknownError"));
+    }
+
+    private async Task OnHubReconnected(string? connectionId)
+    {
+        Log.Information("Авто-реконнект выполнен connectionId={ConnectionId}", connectionId);
+        var hub = _hub;
+        if (hub != null && _lastHello != null)
         {
-            while (_ws != null && _ws.State == WebSocketState.Open && !_cts!.Token.IsCancellationRequested)
+            try
             {
-                using var ms = new MemoryStream();
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await _ws.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
-                        return;
-                    }
-                    ms.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                string json = Encoding.UTF8.GetString(ms.ToArray());
-                var msg = JsonSerializer.Deserialize<BaseMessage>(json);
-                if (msg == null) continue;
-
-                switch (msg.Type)
-                {
-                    case "SendEmailCodeResponse":
-                        OnSendEmailCodeResponse?.Invoke(msg.Payload.Deserialize<SendEmailCodeResponsePayload>()!);
-                        break;
-                    case "LoginResponse":
-                        OnLoginResponse?.Invoke(msg.Payload.Deserialize<LoginResponsePayload>()!);
-                        break;
-                    case "RegisterAccountResponse":
-                        OnRegisterAccountResponse?.Invoke(msg.Payload.Deserialize<RegisterAccountResponsePayload>()!);
-                        break;
-                    case "HelloResponse":
-                        OnHelloResponse?.Invoke(msg.Payload.Deserialize<HelloResponsePayload>()!);
-                        break;
-                    case "IncomingMessage":
-                        OnIncomingMessage?.Invoke(msg.Payload.Deserialize<IncomingMessagePayload>()!);
-                        break;
-                    case "DeliveryStatus":
-                        OnDeliveryStatus?.Invoke(msg.Payload.Deserialize<DeliveryStatusPayload>()!);
-                        break;
-                    case "PublicKeyResponse":
-                        OnPublicKeyResponse?.Invoke(msg.Payload.Deserialize<PublicKeyResponsePayload>()!);
-                        break;
-                    case "ContactList":
-                        OnContactList?.Invoke(msg.Payload.Deserialize<ContactListPayload>()!);
-                        break;
-                    case "UserProfileUpdated":
-                        OnUserProfileUpdated?.Invoke(msg.Payload.Deserialize<UserProfileUpdatedPayload>()!);
-                        break;
-                    case "UserInfoResponse":
-                        OnUserInfoResponse?.Invoke(msg.Payload.Deserialize<UserInfoResponsePayload>()!);
-                        break;
-                    case "HistoryResponse":
-                        OnHistoryResponse?.Invoke(msg.Payload.Deserialize<HistoryResponsePayload>()!);
-                        break;
-                    case "AddContactResponse":
-                        OnAddContactResponse?.Invoke(msg.Payload.Deserialize<AddContactResponsePayload>()!);
-                        break;
-                    case "UserOnline":
-                        var online = msg.Payload.Deserialize<OnlineStatusPayload>();
-                        if (online != null) OnUserOnline?.Invoke(online.UserId);
-                        break;
-                    case "UserOffline":
-                        var offline = msg.Payload.Deserialize<OnlineStatusPayload>();
-                        if (offline != null) OnUserOffline?.Invoke(offline.UserId);
-                        break;
-                    case "Error":
-                        var err = msg.Payload.Deserialize<SimpleStatusPayload>();
-                        OnError?.Invoke(err?.Status ?? "UnknownError");
-                        break;
-                }
+                // новое соединение не аутентифицировано — восстанавливаем сессию
+                await hub.InvokeAsync("Hello", _lastHello);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Не удалось восстановить сессию после реконнекта");
             }
         }
-        catch (OperationCanceledException) { Log.Debug("ReadLoop отменён"); }
-        catch (Exception ex)
-        {
-            if (!_isDisconnecting) Log.Error(ex, "Ошибка сети WebSocket");
-            if (!_isDisconnecting) OnError?.Invoke($"Ошибка сети WebSocket: {ex.Message}");
-        }
-        finally
-        {
-            Log.Debug("ReadLoop завершён");
-            OnDisconnected?.Invoke();
-        }
+        OnConnected?.Invoke();
+    }
+
+    private Task OnHubClosed(Exception? error)
+    {
+        if (error != null) Log.Warning(error, "Соединение закрыто с ошибкой");
+        OnDisconnected?.Invoke();
+        return Task.CompletedTask;
+    }
+
+    private static string NormalizeHubUrl(string serverUrl)
+    {
+        string url = serverUrl.Trim();
+        if (url.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)) url = "http://" + url[5..];
+        else if (url.StartsWith("wss://", StringComparison.OrdinalIgnoreCase)) url = "https://" + url[6..];
+        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            url = "http://" + url;
+        return url.TrimEnd('/') + "/hub";
     }
 
     public void Disconnect()
     {
+        var hub = _hub;
+        _hub = null;
+        _lastHello = null;
+        if (hub == null) return;
+
+        bool wasActive = hub.State != HubConnectionState.Disconnected;
+        try
+        {
+            hub.Closed -= OnHubClosed;
+            hub.Reconnected -= OnHubReconnected;
+        }
+        catch { }
+
         Log.Information("Отключение от сервера");
-        _isDisconnecting = true;
-        _cts?.Cancel();
-        try { _ws?.Dispose(); } catch { }
-        _ws = null;
+        _ = Task.Run(async () => { try { await hub.DisposeAsync(); } catch { } });
+        if (wasActive) OnDisconnected?.Invoke();
     }
 }
