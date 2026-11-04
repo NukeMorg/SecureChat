@@ -295,3 +295,17 @@ public class SimpleStatusPayload
 {
     [JsonPropertyName("Status")] public string Status { get; set; } = "";
 }
+
+/// <summary>
+/// Запись журнала аудита (требование 1.7.3). Action/Result — English-константы.
+/// </summary>
+public class AuditLogEntry
+{
+    [JsonPropertyName("Id")] public long Id { get; set; }
+    [JsonPropertyName("Timestamp")] public string Timestamp { get; set; } = "";
+    [JsonPropertyName("ActorId")] public int? ActorId { get; set; }
+    [JsonPropertyName("Action")] public string Action { get; set; } = "";
+    [JsonPropertyName("TargetId")] public int? TargetId { get; set; }
+    [JsonPropertyName("Result")] public string Result { get; set; } = "";
+    [JsonPropertyName("IpAddress")] public string IpAddress { get; set; } = "";
+}

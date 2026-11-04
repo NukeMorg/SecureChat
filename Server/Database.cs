@@ -32,7 +32,11 @@ public class Database
                 PasswordHash TEXT,
                 Salt TEXT,
                 PublicKey TEXT NOT NULL,
-                UserName TEXT DEFAULT 'User'
+                UserName TEXT DEFAULT 'User',
+                Role TEXT NOT NULL DEFAULT 'Employee',
+                IsActive INTEGER NOT NULL DEFAULT 1,
+                Status TEXT NOT NULL DEFAULT '',
+                AvatarPath TEXT
             );
             CREATE TABLE IF NOT EXISTS EmailVerifications (
                 Email TEXT PRIMARY KEY,
@@ -91,19 +95,75 @@ public class Database
         Log.Information("Database initialized: {DbPath}", Path.GetFullPath("server.db"));
     }
 
-    /// <summary>Миграции существующей схемы: добавление колонок через ALTER TABLE.</summary>
-    private static void Migrate(SqliteConnection conn)
+    /// <summary>Миграции существующей схемы: версии через PRAGMA user_version.</summary>
+    private void Migrate(SqliteConnection conn)
+    {
+        long version = GetUserVersion(conn);
+
+        if (version < 1)
+        {
+            ApplyV1(conn); // сессии: TTL/ревокация; клиенты: роль/активность/статус/аватар; AuditLog
+        }
+
+        SetUserVersion(conn, Math.Max(version, 1));
+    }
+
+    /// <summary>
+    /// Миграция v1 (Фаза B): роли Admin/HR/Employee, блокировка, статус, аватар,
+    /// таблица AuditLog (append-only — триггеры запрещают UPDATE/DELETE).
+    /// </summary>
+    private void ApplyV1(SqliteConnection conn)
     {
         bool addedExpiresAt = TryAddColumn(conn, "Sessions", "ExpiresAt", "TEXT");
         TryAddColumn(conn, "Sessions", "IsRevoked", "INTEGER NOT NULL DEFAULT 0");
         if (addedExpiresAt)
         {
-            // легаси-сессии были бессрочными: продлеваем их на 7 дней с момента миграции
             using var backfill = conn.CreateCommand();
             backfill.CommandText = "UPDATE Sessions SET ExpiresAt = @e WHERE ExpiresAt IS NULL";
             backfill.Parameters.AddWithValue("@e", DateTime.UtcNow.AddDays(7).ToString("o"));
             backfill.ExecuteNonQuery();
         }
+
+        TryAddColumn(conn, "Clients", "Role", "TEXT NOT NULL DEFAULT 'Employee'");
+        TryAddColumn(conn, "Clients", "IsActive", "INTEGER NOT NULL DEFAULT 1");
+        TryAddColumn(conn, "Clients", "Status", "TEXT NOT NULL DEFAULT ''");
+        TryAddColumn(conn, "Clients", "AvatarPath", "TEXT");
+
+        using (var audit = conn.CreateCommand())
+        {
+            audit.CommandText = @"
+                CREATE TABLE IF NOT EXISTS AuditLog (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    Timestamp TEXT NOT NULL,
+                    ActorId INTEGER,
+                    Action TEXT NOT NULL,
+                    TargetId INTEGER,
+                    Result TEXT NOT NULL DEFAULT 'Ok',
+                    IpAddress TEXT NOT NULL DEFAULT '',
+                    UserAgent TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_auditlog_time ON AuditLog(Timestamp);
+                CREATE INDEX IF NOT EXISTS idx_auditlog_actor ON AuditLog(ActorId);
+                CREATE TRIGGER IF NOT EXISTS trg_auditlog_no_update BEFORE UPDATE ON AuditLog
+                BEGIN SELECT RAISE(ABORT, 'AuditLog is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_auditlog_no_delete BEFORE DELETE ON AuditLog
+                BEGIN SELECT RAISE(ABORT, 'AuditLog is append-only'); END;";
+            audit.ExecuteNonQuery();
+        }
+    }
+
+    private static long GetUserVersion(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA user_version;";
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    private static void SetUserVersion(SqliteConnection conn, long version)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA user_version = {version};";
+        cmd.ExecuteNonQuery();
     }
 
     private static bool TryAddColumn(SqliteConnection conn, string table, string column, string type)
@@ -345,8 +405,9 @@ public class Database
         CleanupSessions(conn);
         var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT UserId FROM Sessions
-            WHERE Token = @token AND IsRevoked = 0 AND ExpiresAt > @now";
+            SELECT s.UserId FROM Sessions s
+            JOIN Clients c ON c.Id = s.UserId
+            WHERE s.Token = @token AND s.IsRevoked = 0 AND s.ExpiresAt > @now AND c.IsActive = 1";
         cmd.Parameters.AddWithValue("@token", token);
         cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("o"));
         var result = cmd.ExecuteScalar();
@@ -381,6 +442,187 @@ public class Database
         cmd.CommandText = "DELETE FROM Sessions WHERE ExpiresAt <= @now OR IsRevoked = 1";
         cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("o"));
         cmd.ExecuteNonQuery();
+    }
+
+    // ---------- Роли, профиль, блокировка (Фаза B) ----------
+
+    public string GetUserRole(int userId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Role FROM Clients WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", userId);
+        var result = cmd.ExecuteScalar() as string;
+        return string.IsNullOrEmpty(result) ? "Employee" : result;
+    }
+
+    public void SetUserRole(int userId, string role)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Clients SET Role = @role WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@role", role);
+        cmd.Parameters.AddWithValue("@id", userId);
+        cmd.ExecuteNonQuery();
+    }
+
+    public bool IsUserActive(int userId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT IsActive FROM Clients WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", userId);
+        var result = cmd.ExecuteScalar();
+        return result == null || Convert.ToInt64(result) == 1;
+    }
+
+    public void SetUserActive(int userId, bool isActive)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Clients SET IsActive = @active WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@active", isActive ? 1 : 0);
+        cmd.Parameters.AddWithValue("@id", userId);
+        cmd.ExecuteNonQuery();
+    }
+
+    public string GetUserStatus(int userId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Status FROM Clients WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", userId);
+        return cmd.ExecuteScalar() as string ?? "";
+    }
+
+    public void SetUserStatus(int userId, string status)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Clients SET Status = @status WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@status", status);
+        cmd.Parameters.AddWithValue("@id", userId);
+        cmd.ExecuteNonQuery();
+    }
+
+    public void SetAvatarPath(int userId, string? path)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Clients SET AvatarPath = @path WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@path", (object?)path ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@id", userId);
+        cmd.ExecuteNonQuery();
+    }
+
+    public string? GetAvatarPath(int userId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT AvatarPath FROM Clients WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", userId);
+        return cmd.ExecuteScalar() as string;
+    }
+
+    /// <summary>Проверка текущего пароля пользователя (с легаси-обновлением хэша).</summary>
+    public bool VerifyPasswordForUser(int userId, string password, out string? upgradeHash)
+    {
+        upgradeHash = null;
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT PasswordHash, Salt FROM Clients WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", userId);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return false;
+        string hash = reader.GetString(0);
+        string salt = reader.IsDBNull(1) ? "" : reader.GetString(1);
+        return PasswordHasher.VerifyAny(password, hash, salt, out upgradeHash);
+    }
+
+    /// <summary>Сохранение нового BCrypt-хэша пароля (смена пароля).</summary>
+    public void UpdatePassword(int userId, string newPassword)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Clients SET PasswordHash = @hash, Salt = NULL WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@hash", PasswordHasher.Hash(newPassword));
+        cmd.Parameters.AddWithValue("@id", userId);
+        cmd.ExecuteNonQuery();
+    }
+
+    // ---------- Аудит (Фаза B, требование 1.7.3) ----------
+
+    public void WriteAudit(int? actorId, string action, int? targetId, string result, string ip, string userAgent = "")
+    {
+        try
+        {
+            using var conn = new SqliteConnection(cs);
+            conn.Open();
+            var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                INSERT INTO AuditLog (Timestamp, ActorId, Action, TargetId, Result, IpAddress, UserAgent)
+                VALUES (@time, @actor, @action, @target, @result, @ip, @ua)";
+            cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+            cmd.Parameters.AddWithValue("@actor", (object?)actorId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@action", action);
+            cmd.Parameters.AddWithValue("@target", (object?)targetId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@result", result);
+            cmd.Parameters.AddWithValue("@ip", ip);
+            cmd.Parameters.AddWithValue("@ua", userAgent);
+            cmd.ExecuteNonQuery();
+        }
+        catch (SqliteException ex)
+        {
+            // аудит не должен ломать основной сценарий; событие остаётся в файловом аудит-логе
+            Log.Warning(ex, "Failed to write AuditLog action={Action}", action);
+        }
+    }
+
+    public long GetAuditLogCount()
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM AuditLog";
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    public List<AuditLogEntry> GetAuditLog(int limit, int offset)
+    {
+        var list = new List<AuditLogEntry>();
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT Id, Timestamp, ActorId, Action, TargetId, Result, IpAddress
+            FROM AuditLog ORDER BY Id DESC LIMIT @limit OFFSET @offset";
+        cmd.Parameters.AddWithValue("@limit", limit);
+        cmd.Parameters.AddWithValue("@offset", offset);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new AuditLogEntry
+            {
+                Id = reader.GetInt64(0),
+                Timestamp = reader.GetString(1),
+                ActorId = reader.IsDBNull(2) ? null : reader.GetInt32(2),
+                Action = reader.GetString(3),
+                TargetId = reader.IsDBNull(4) ? null : reader.GetInt32(4),
+                Result = reader.GetString(5),
+                IpAddress = reader.GetString(6)
+            });
+        }
+        return list;
     }
 
     public bool UserExists(int id)
