@@ -544,7 +544,11 @@ public partial class LoginWindow : Window
             if (cfg == null) return;
 
             if (cfg.TryGetValue("PublicKey", out var pub)) PublicKeyPem = pub;
-            if (cfg.TryGetValue("PrivateKey", out var priv)) PrivateKeyPem = priv;
+            if (cfg.TryGetValue("PrivateKey", out var priv))
+            {
+                string? decrypted = SecretProtector.Unprotect(priv);
+                if (decrypted != null) PrivateKeyPem = decrypted;
+            }
             bool remember = cfg.TryGetValue("RememberMe", out var rem) && rem == "true";
             RememberMeCheckBox.IsChecked = remember;
             if (remember && cfg.TryGetValue("Login", out var log) && !string.IsNullOrWhiteSpace(log))
@@ -565,9 +569,10 @@ public partial class LoginWindow : Window
             {
                 ["ClientId"] = AuthenticatedUserId.ToString(),
                 ["UserName"] = AuthenticatedUserName,
-                ["Token"] = Token,
+                // секреты шифруются через DPAPI (CurrentUser)
+                ["Token"] = SecretProtector.Protect(Token),
                 ["PublicKey"] = PublicKeyPem,
-                ["PrivateKey"] = PrivateKeyPem,
+                ["PrivateKey"] = SecretProtector.Protect(PrivateKeyPem),
                 ["Theme"] = App.CurrentTheme
             };
 
@@ -616,12 +621,17 @@ public partial class LoginWindow : Window
             var cfg = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, string>>(File.ReadAllText(ConfigFile));
             if (cfg == null) return null;
             if (!cfg.TryGetValue("RememberMe", out var rem) || rem != "true") return null;
-            if (!cfg.TryGetValue("Token", out var token) || string.IsNullOrEmpty(token)) return null;
+            if (!cfg.TryGetValue("Token", out var tokenRaw) || string.IsNullOrEmpty(tokenRaw)) return null;
             if (!cfg.TryGetValue("PublicKey", out var pub) || string.IsNullOrEmpty(pub)) return null;
-            if (!cfg.TryGetValue("PrivateKey", out var priv) || string.IsNullOrEmpty(priv)) return null;
+            if (!cfg.TryGetValue("PrivateKey", out var privRaw) || string.IsNullOrEmpty(privRaw)) return null;
             if (!cfg.TryGetValue("ClientId", out var idStr) || !int.TryParse(idStr, out var id)) return null;
             if (!cfg.TryGetValue("UserName", out var name) || string.IsNullOrEmpty(name)) return null;
-            return new AutoLoginSession(id, name, token, pub, priv);
+
+            string? token = SecretProtector.Unprotect(tokenRaw);
+            string? privateKey = SecretProtector.Unprotect(privRaw);
+            if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(privateKey)) return null;
+
+            return new AutoLoginSession(id, name, token, pub, privateKey);
         }
         catch (Exception ex)
         {
