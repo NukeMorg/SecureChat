@@ -56,6 +56,11 @@
             <MenuItem Header="Профиль">
                 <MenuItem Header="Изменить имя..." Command="{x:Static local:MainWindow.ChangeNameCommand}" InputGestureText="Ctrl+N"/>
                 <MenuItem Header="Сменить пароль..." Click="ChangePassword_Click"/>
+                <MenuItem Header="Изменить статус..." Click="ChangeStatus_Click"/>
+                <MenuItem Header="Загрузить аватар..." Click="UploadAvatar_Click"/>
+                <Separator/>
+                <MenuItem Header="Мой профиль..." Click="ShowMyProfile_Click"/>
+                <MenuItem Header="Профиль выбранного пользователя..." Click="ShowSelectedProfile_Click"/>
                 <Separator/>
                 <MenuItem Header="Показать мой публичный ключ" Click="ShowMyPublicKey_Click"/>
             </MenuItem>

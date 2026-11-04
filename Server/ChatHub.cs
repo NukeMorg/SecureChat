@@ -337,6 +337,81 @@ public class ChatHub : Hub
         return new SimpleStatusPayload { Status = "Ok" };
     }
 
+    // ---------- Профиль: статус и аватар (требование 1.1.4) ----------
+
+    public Task<SimpleStatusPayload> UpdateStatus(UpdateStatusPayload? p)
+    {
+        if (UserId is not int uid) return Task.FromResult(new SimpleStatusPayload { Status = "Forbidden" });
+        if (p == null || p.Status.Length > 100 || Validators.HasControlCharacters(p.Status))
+            return Task.FromResult(new SimpleStatusPayload { Status = "InvalidStatus" });
+
+        _db.SetUserStatus(uid, p.Status);
+        _log.Information("Status updated userId={UserId} length={Length}", uid, p.Status.Length);
+        return Task.FromResult(new SimpleStatusPayload { Status = "Ok" });
+    }
+
+    public async Task<SimpleStatusPayload> UploadAvatar(UploadAvatarPayload? p)
+    {
+        if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (p == null || string.IsNullOrEmpty(p.DataBase64))
+            return new SimpleStatusPayload { Status = "InvalidAvatar" };
+        if (p.DataBase64.Length > 2_800_000) // 2 МБ после декодирования
+            return new SimpleStatusPayload { Status = "AvatarTooLarge" };
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(p.DataBase64);
+        }
+        catch (FormatException)
+        {
+            return new SimpleStatusPayload { Status = "InvalidAvatar" };
+        }
+        if (bytes.Length > 2 * 1024 * 1024)
+            return new SimpleStatusPayload { Status = "AvatarTooLarge" };
+
+        // клиент перекодирует в PNG; сервер проверяет магические байты
+        byte[] pngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        if (bytes.Length < pngSignature.Length || !bytes.AsSpan(0, pngSignature.Length).SequenceEqual(pngSignature))
+            return new SimpleStatusPayload { Status = "InvalidAvatarFormat" };
+
+        string avatarsDir = Path.Combine(Directory.GetCurrentDirectory(), "avatars");
+        Directory.CreateDirectory(avatarsDir);
+        string filePath = Path.Combine(avatarsDir, $"{uid}.png");
+        await File.WriteAllBytesAsync(filePath, bytes);
+        _db.SetAvatarPath(uid, filePath);
+
+        _log.Information("Avatar updated userId={UserId} size={Size}B", uid, bytes.Length);
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
+    /// <summary>Профиль доступен себе и контактам (данные публичны только для контактов).</summary>
+    public Task<UserProfileDto?> GetUserProfile(GetUserProfilePayload? p)
+    {
+        if (UserId is not int uid || p == null || p.TargetId <= 0)
+            return Task.FromResult<UserProfileDto?>(null);
+        if (p.TargetId != uid && !_db.GetContactIds(uid).Contains(p.TargetId))
+            return Task.FromResult<UserProfileDto?>(null);
+
+        string? avatarPath = _db.GetAvatarPath(p.TargetId);
+        string? avatarBase64 = null;
+        if (avatarPath != null && File.Exists(avatarPath))
+        {
+            byte[] bytes = File.ReadAllBytes(avatarPath);
+            avatarBase64 = Convert.ToBase64String(bytes);
+        }
+
+        return Task.FromResult<UserProfileDto?>(new UserProfileDto
+        {
+            UserId = p.TargetId,
+            UserName = _db.GetUserName(p.TargetId) ?? $"User {p.TargetId}",
+            Status = _db.GetUserStatus(p.TargetId),
+            Role = _db.GetUserRole(p.TargetId),
+            IsOnline = _registry.IsOnline(p.TargetId),
+            AvatarBase64 = avatarBase64
+        });
+    }
+
     // ---------- Direct-чаты ----------
 
     public async Task SendMessage(SendMessagePayload? p)

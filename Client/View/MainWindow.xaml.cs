@@ -427,6 +427,76 @@ public partial class MainWindow : Window
         }
     }
 
+    // ---------- Профиль: статус, аватар, просмотр ----------
+
+    private async void ChangeStatus_Click(object sender, RoutedEventArgs e)
+    {
+        string? status = ShowInputDialog("Статус (до 100 символов)", "");
+        if (status == null) return;
+
+        var resp = await _network.UpdateStatusAsync(new UpdateStatusPayload { Status = status });
+        if (resp?.Status != "Ok")
+            MessageBox.Show("Статус отклонён: максимум 100 символов, без управляющих символов.",
+                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    private async void UploadAvatar_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Выберите изображение аватара",
+            Filter = "Изображения (PNG, JPEG)|*.png;*.jpg;*.jpeg|Все файлы|*.*"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            byte[] png = AvatarEncoder.EncodeToPng(dlg.FileName);
+            var resp = await _network.UploadAvatarAsync(new UploadAvatarPayload
+            {
+                DataBase64 = Convert.ToBase64String(png)
+            });
+            if (resp?.Status == "Ok")
+                MessageBox.Show("Аватар обновлён.", "Профиль", MessageBoxButton.OK, MessageBoxImage.Information);
+            else
+                MessageBox.Show($"Аватар отклонён: {MapAdminError(resp?.Status)}",
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        catch (InvalidOperationException ex)
+        {
+            MessageBox.Show(ex.Message, "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void ShowMyProfile_Click(object sender, RoutedEventArgs e)
+    {
+        await ShowProfileAsync(_clientId);
+    }
+
+    private async void ShowSelectedProfile_Click(object sender, RoutedEventArgs e)
+    {
+        if (ContactsListBox.SelectedItem is not ContactItem contact)
+        {
+            MessageBox.Show("Выберите пользователя в списке контактов.", "Профиль",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        await ShowProfileAsync(contact.Id);
+    }
+
+    private async Task ShowProfileAsync(int targetId)
+    {
+        var profile = await _network.GetUserProfileAsync(new GetUserProfilePayload { TargetId = targetId });
+        if (profile == null)
+        {
+            MessageBox.Show("Профиль недоступен: пользователь не найден среди ваших контактов.",
+                "Профиль", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var window = new ProfileWindow(profile) { Owner = this };
+        window.Show();
+    }
+
     private void ShowMyPublicKey_Click(object sender, RoutedEventArgs e)
     {
         Clipboard.SetText(_publicKeyPem);

@@ -145,22 +145,37 @@ public class NetworkService
     public Task<SimpleStatusPayload?> ChangePasswordAsync(ChangePasswordPayload payload) =>
         InvokeWithResultAsync("ChangePassword", payload);
 
+    // ---------- Профиль: статус и аватар ----------
+
+    public Task<SimpleStatusPayload?> UpdateStatusAsync(UpdateStatusPayload payload) =>
+        InvokeWithResultAsync("UpdateStatus", payload);
+
+    public Task<SimpleStatusPayload?> UploadAvatarAsync(UploadAvatarPayload payload) =>
+        InvokeWithResultAsync("UploadAvatar", payload);
+
+    public Task<UserProfileDto?> GetUserProfileAsync(GetUserProfilePayload payload) =>
+        InvokeWithResultAsync<UserProfileDto>("GetUserProfile", payload);
+
     /// <summary>Вызов хаб-метода с ответом-статусом (Admin-операции, смена пароля).</summary>
-    private async Task<SimpleStatusPayload?> InvokeWithResultAsync(string methodName, object payload)
+    private Task<SimpleStatusPayload?> InvokeWithResultAsync(string methodName, object payload) =>
+        InvokeWithResultAsync<SimpleStatusPayload>(methodName, payload);
+
+    /// <summary>Вызов хаб-метода с типизированным ответом.</summary>
+    private async Task<TResponse?> InvokeWithResultAsync<TResponse>(string methodName, object payload)
     {
         var hub = _hub;
         if (hub == null || hub.State != HubConnectionState.Connected)
-            return new SimpleStatusPayload { Status = "NotConnected" };
+            return default;
 
         await _sendLock.WaitAsync();
         try
         {
-            return await hub.InvokeAsync<SimpleStatusPayload>(methodName, payload);
+            return await hub.InvokeAsync<TResponse?>(methodName, payload);
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Send error {Method}", methodName);
-            return new SimpleStatusPayload { Status = "Error" };
+            return default;
         }
         finally
         {

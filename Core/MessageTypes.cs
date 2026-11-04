@@ -355,3 +355,40 @@ public class ChangePasswordPayload
     [JsonPropertyName("CurrentPassword")] public string CurrentPassword { get; set; } = "";
     [JsonPropertyName("NewPassword")] public string NewPassword { get; set; } = "";
 }
+
+/// <summary>
+/// Обновление статуса пользователя (≤ 100 символов, требование 1.1.4).
+/// </summary>
+public class UpdateStatusPayload
+{
+    [JsonPropertyName("Status")] public string Status { get; set; } = "";
+}
+
+/// <summary>
+/// Загрузка аватара: PNG (после клиентского re-encode), ≤ 2 МБ.
+/// </summary>
+public class UploadAvatarPayload
+{
+    [JsonPropertyName("DataBase64")] public string DataBase64 { get; set; } = "";
+}
+
+/// <summary>
+/// Запрос профиля пользователя.
+/// </summary>
+public class GetUserProfilePayload
+{
+    [JsonPropertyName("TargetId")] public int TargetId { get; set; }
+}
+
+/// <summary>
+/// Профиль пользователя: публичные данные (требование 1.1.4).
+/// </summary>
+public class UserProfileDto
+{
+    [JsonPropertyName("UserId")] public int UserId { get; set; }
+    [JsonPropertyName("UserName")] public string UserName { get; set; } = "";
+    [JsonPropertyName("Status")] public string Status { get; set; } = "";
+    [JsonPropertyName("Role")] public string Role { get; set; } = "Employee";
+    [JsonPropertyName("IsOnline")] public bool IsOnline { get; set; }
+    [JsonPropertyName("AvatarBase64")] public string? AvatarBase64 { get; set; }
+}
