@@ -1,3 +1,4 @@
+using SecureChat.Security;
 ﻿using System;
 using System.Net;
 using System.Net.Mail;
@@ -38,7 +39,7 @@ public class EmailService
         if (!_useRealSmtp || string.IsNullOrWhiteSpace(_senderEmail) || string.IsNullOrWhiteSpace(_senderPassword))
         {
             Log.Warning("[DEV MODE] Verification code for {MaskedEmail}: {Code}. SMTP disabled.",
-                PiiMasking.Email(toEmail), code);
+                PiiMasker.Email(toEmail), code);
             return true;
         }
 
@@ -61,13 +62,13 @@ public class EmailService
             mail.To.Add(toEmail);
 
             await client.SendMailAsync(mail);
-            Log.Information("Verification email sent to {MaskedEmail}", PiiMasking.Email(toEmail));
+            Log.Information("Verification email sent to {MaskedEmail}", PiiMasker.Email(toEmail));
             return true;
         }
         catch (Exception ex)
         {
             // НЕ логируем код в тексте ошибки — ex.Message может содержать тело письма
-            Log.Error(ex, "Failed to send verification email to {MaskedEmail}", PiiMasking.Email(toEmail));
+            Log.Error(ex, "Failed to send verification email to {MaskedEmail}", PiiMasker.Email(toEmail));
             return false;
         }
     }

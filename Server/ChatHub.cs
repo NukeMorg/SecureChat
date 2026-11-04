@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.SignalR;
 using SecureChat.Core;
+using SecureChat.Security;
 using Serilog;
 using ILogger = Serilog.ILogger;
 using Serilog.Context;
@@ -34,6 +35,16 @@ public class ChatHub : Hub
         if (!string.IsNullOrEmpty(token)) Context.Items[SessionTokenKey] = token;
     }
 
+    private string? Role() => UserId is int uid ? _db.GetUserRole(uid) : null;
+
+    private bool IsAdmin() => Role() == "Admin";
+
+    private string ClientIp =>
+        Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+    private void WriteAudit(int? actorId, string action, int? targetId, string result) =>
+        _db.WriteAudit(actorId, action, targetId, result, ClientIp);
+
     // ---------- Аутентификация ----------
 
     public async Task SendEmailCode(SendEmailCodePayload? p)
@@ -47,7 +58,7 @@ public class ChatHub : Hub
 
         if (!_db.TryReserveEmailSend(p.Email, TimeSpan.FromMinutes(15), maxAttempts: 3))
         {
-            _log.Warning("Email code rate limit for {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Warning("Email code rate limit for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("SendEmailCodeResponse",
                 new SendEmailCodeResponsePayload { Status = "RateLimit", Message = "Слишком много запросов. Попробуйте через 15 минут." });
             return;
@@ -59,13 +70,13 @@ public class ChatHub : Hub
         bool sent = await _email.SendVerificationCodeAsync(p.Email, code);
         if (sent)
         {
-            _log.Information("Verification code sent to {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Information("Verification code sent to {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("SendEmailCodeResponse",
                 new SendEmailCodeResponsePayload { Status = "Ok", Message = "Код подтверждения отправлен на почту." });
         }
         else
         {
-            _log.Error("Failed to send email to {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Error("Failed to send email to {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("SendEmailCodeResponse",
                 new SendEmailCodeResponsePayload { Status = "SendFailed", Message = "Не удалось отправить письмо." });
         }
@@ -80,12 +91,12 @@ public class ChatHub : Hub
             return;
         }
 
-        _log.Information("Login attempt for {MaskedEmail}", PiiMasking.Email(p.Email));
+        _log.Information("Login attempt for {MaskedEmail}", PiiMasker.Email(p.Email));
 
         string ip = Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         if (_db.IsLoginBlocked(p.Email, ip, TimeSpan.FromMinutes(15), maxAttempts: 5))
         {
-            _log.Warning("Login rate limit exceeded for {MaskedEmail} ip={Ip}", PiiMasking.Email(p.Email), ip);
+            _log.Warning("Login rate limit exceeded for {MaskedEmail} ip={Ip}", PiiMasker.Email(p.Email), ip);
             await Respond("LoginResponse", new LoginResponsePayload { Status = "RateLimited" });
             return;
         }
@@ -94,20 +105,35 @@ public class ChatHub : Hub
         if (auth == null)
         {
             _db.RecordFailedLogin(p.Email, ip);
-            _log.Warning("Invalid credentials for {MaskedEmail}", PiiMasking.Email(p.Email));
+            WriteAudit(null, "FailedLogin", null, "InvalidCredentials");
+            _log.Warning("Invalid credentials for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("LoginResponse", new LoginResponsePayload { Status = "InvalidCredentials" });
             return;
         }
 
         int userId = auth.Value.id;
+
+        if (!_db.IsUserActive(userId))
+        {
+            WriteAudit(userId, "Login", userId, "Banned");
+            _log.Warning("Login rejected: banned userId={UserId}", userId);
+            await Respond("LoginResponse", new LoginResponsePayload { Status = "Banned" });
+            return;
+        }
+
         _registry.Register(userId, Context.ConnectionId);
         RememberSessionToken(auth.Value.token);
 
+        WriteAudit(userId, "Login", userId, "Ok");
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Login", userId);
         _log.Information("Login successful userId={UserId}", userId);
 
         await Respond("LoginResponse",
-            new LoginResponsePayload { Status = "Ok", UserId = userId, UserName = auth.Value.name, Token = auth.Value.token });
+            new LoginResponsePayload
+            {
+                Status = "Ok", UserId = userId, UserName = auth.Value.name,
+                Token = auth.Value.token, Role = _db.GetUserRole(userId)
+            });
 
         await NotifyOnlineStatus(userId);
         await PushPendingMessages(userId);
@@ -131,18 +157,18 @@ public class ChatHub : Hub
             return;
         }
 
-        _log.Information("Registration request for {MaskedEmail}", PiiMasking.Email(p.Email));
+        _log.Information("Registration request for {MaskedEmail}", PiiMasker.Email(p.Email));
 
         var verifyResult = _db.VerifyAndConsumeCode(p.Email, p.Code);
         if (verifyResult == Database.CodeVerifyResult.Invalid)
         {
-            _log.Warning("Invalid verification code for {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Warning("Invalid verification code for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "InvalidCode" });
             return;
         }
         if (verifyResult == Database.CodeVerifyResult.Expired)
         {
-            _log.Warning("Verification code expired for {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Warning("Verification code expired for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "CodeExpired" });
             return;
         }
@@ -150,7 +176,7 @@ public class ChatHub : Hub
         var reg = _db.RegisterUser(p.Email, p.Password, p.UserName, p.PublicKey);
         if (reg == null)
         {
-            _log.Warning("User already exists: {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Warning("User already exists: {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "UserExists" });
             return;
         }
@@ -162,8 +188,13 @@ public class ChatHub : Hub
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Register", userId);
         _log.Information("New user registered userId={UserId}", userId);
 
+        WriteAudit(userId, "Register", userId, "Ok");
+
         await Respond("RegisterAccountResponse",
-            new RegisterAccountResponsePayload { Status = "Ok", AssignedId = userId, Token = reg.Value.token });
+            new RegisterAccountResponsePayload
+            {
+                Status = "Ok", AssignedId = userId, Token = reg.Value.token, Role = _db.GetUserRole(userId)
+            });
 
         await NotifyOnlineStatus(userId);
     }
@@ -190,7 +221,10 @@ public class ChatHub : Hub
         _log.Information("Hello: reconnect userId={UserId}", userId.Value);
 
         await Respond("HelloResponse",
-            new HelloResponsePayload { Status = "Ok", UserId = userId.Value, UserName = name });
+            new HelloResponsePayload
+            {
+                Status = "Ok", UserId = userId.Value, UserName = name, Role = _db.GetUserRole(userId.Value)
+            });
 
         await NotifyOnlineStatus(userId.Value);
         await PushPendingMessages(userId.Value);
@@ -212,6 +246,187 @@ public class ChatHub : Hub
         await Clients.AllExcept(Context.ConnectionId).SendAsync("UserOffline",
             new OnlineStatusPayload { UserId = uid });
         Context.Abort();
+    }
+
+    // ---------- Администрирование (только Admin, таблица 1.1.3) ----------
+
+    public async Task<SimpleStatusPayload> BanUser(BanUserPayload? p)
+    {
+        if (!IsAdmin()) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (p == null || p.TargetId <= 0 || !_db.UserExists(p.TargetId))
+            return new SimpleStatusPayload { Status = "NotFound" };
+        if (p.TargetId == UserId)
+            return new SimpleStatusPayload { Status = "CannotBanSelf" };
+        if (p.Reason.Length > 200 || Validators.HasControlCharacters(p.Reason))
+            return new SimpleStatusPayload { Status = "InvalidReason" };
+
+        int adminId = UserId!.Value;
+        _db.SetUserActive(p.TargetId, false);
+        _db.RevokeAllUserSessions(p.TargetId); // требование 1.1.5: отзыв сессий при бане
+
+        foreach (var connId in _registry.GetConnections(p.TargetId))
+        {
+            // заблокированный клиент получит событие и отключится сам
+            await Clients.Client(connId).SendAsync("Banned", new BannedPayload { Reason = p.Reason });
+        }
+
+        WriteAudit(adminId, "BanUser", p.TargetId, "Ok");
+        _log.ForContext("Audit", true).Information("AUDIT {Action} adminId={AdminId} targetId={TargetId}",
+            "BanUser", adminId, p.TargetId);
+
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
+    public Task<SimpleStatusPayload> UnbanUser(UnbanUserPayload? p)
+    {
+        if (!IsAdmin()) return Task.FromResult(new SimpleStatusPayload { Status = "Forbidden" });
+        if (p == null || p.TargetId <= 0 || !_db.UserExists(p.TargetId))
+            return Task.FromResult(new SimpleStatusPayload { Status = "NotFound" });
+
+        int adminId = UserId!.Value;
+        _db.SetUserActive(p.TargetId, true);
+
+        WriteAudit(adminId, "UnbanUser", p.TargetId, "Ok");
+        _log.ForContext("Audit", true).Information("AUDIT {Action} adminId={AdminId} targetId={TargetId}",
+            "UnbanUser", adminId, p.TargetId);
+
+        return Task.FromResult(new SimpleStatusPayload { Status = "Ok" });
+    }
+
+    public Task<SimpleStatusPayload> ChangeRole(ChangeRolePayload? p)
+    {
+        if (!IsAdmin()) return Task.FromResult(new SimpleStatusPayload { Status = "Forbidden" });
+        if (p == null || p.TargetId <= 0 || !_db.UserExists(p.TargetId))
+            return Task.FromResult(new SimpleStatusPayload { Status = "NotFound" });
+        if (p.TargetId == UserId)
+            // защита от потери последнего Admin
+            return Task.FromResult(new SimpleStatusPayload { Status = "CannotChangeOwnRole" });
+        if (p.Role is not ("Admin" or "HR" or "Employee"))
+            return Task.FromResult(new SimpleStatusPayload { Status = "InvalidRole" });
+
+        int adminId = UserId!.Value;
+        _db.SetUserRole(p.TargetId, p.Role);
+
+        WriteAudit(adminId, "ChangeRole", p.TargetId, "Ok");
+        _log.ForContext("Audit", true).Information("AUDIT {Action} adminId={AdminId} targetId={TargetId} role={Role}",
+            "ChangeRole", adminId, p.TargetId, p.Role);
+
+        return Task.FromResult(new SimpleStatusPayload { Status = "Ok" });
+    }
+
+    /// <summary>Смена пароля: проверка текущего, отзыв всех сессий (требование 1.1.4).</summary>
+    public async Task<SimpleStatusPayload> ChangePassword(ChangePasswordPayload? p)
+    {
+        if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (p == null) return new SimpleStatusPayload { Status = "Error" };
+
+        if (!_db.VerifyPasswordForUser(uid, p.CurrentPassword, out _))
+        {
+            WriteAudit(uid, "ChangePassword", uid, "WrongPassword");
+            return new SimpleStatusPayload { Status = "WrongPassword" };
+        }
+        if (!Validators.IsValidPassword(p.NewPassword))
+            return new SimpleStatusPayload { Status = "WeakPassword" };
+
+        _db.UpdatePassword(uid, p.NewPassword);
+        _db.RevokeAllUserSessions(uid);
+
+        WriteAudit(uid, "ChangePassword", uid, "Ok");
+        _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId}", "ChangePassword", uid);
+        _log.Information("Password changed, all sessions revoked userId={UserId}", uid);
+
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
+    // ---------- Профиль: статус и аватар (требование 1.1.4) ----------
+
+    public Task<SimpleStatusPayload> UpdateStatus(UpdateStatusPayload? p)
+    {
+        if (UserId is not int uid) return Task.FromResult(new SimpleStatusPayload { Status = "Forbidden" });
+        if (p == null || p.Status.Length > 100 || Validators.HasControlCharacters(p.Status))
+            return Task.FromResult(new SimpleStatusPayload { Status = "InvalidStatus" });
+
+        _db.SetUserStatus(uid, p.Status);
+        _log.Information("Status updated userId={UserId} length={Length}", uid, p.Status.Length);
+        return Task.FromResult(new SimpleStatusPayload { Status = "Ok" });
+    }
+
+    public async Task<SimpleStatusPayload> UploadAvatar(UploadAvatarPayload? p)
+    {
+        if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (p == null || string.IsNullOrEmpty(p.DataBase64))
+            return new SimpleStatusPayload { Status = "InvalidAvatar" };
+        if (p.DataBase64.Length > 2_800_000) // 2 МБ после декодирования
+            return new SimpleStatusPayload { Status = "AvatarTooLarge" };
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(p.DataBase64);
+        }
+        catch (FormatException)
+        {
+            return new SimpleStatusPayload { Status = "InvalidAvatar" };
+        }
+        if (bytes.Length > 2 * 1024 * 1024)
+            return new SimpleStatusPayload { Status = "AvatarTooLarge" };
+
+        // клиент перекодирует в PNG; сервер проверяет магические байты
+        byte[] pngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        if (bytes.Length < pngSignature.Length || !bytes.AsSpan(0, pngSignature.Length).SequenceEqual(pngSignature))
+            return new SimpleStatusPayload { Status = "InvalidAvatarFormat" };
+
+        string avatarsDir = Path.Combine(Directory.GetCurrentDirectory(), "avatars");
+        Directory.CreateDirectory(avatarsDir);
+        string filePath = Path.Combine(avatarsDir, $"{uid}.png");
+        await File.WriteAllBytesAsync(filePath, bytes);
+        _db.SetAvatarPath(uid, filePath);
+
+        _log.Information("Avatar updated userId={UserId} size={Size}B", uid, bytes.Length);
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
+    /// <summary>Профиль доступен себе и контактам (данные публичны только для контактов).</summary>
+    public Task<UserProfileDto?> GetUserProfile(GetUserProfilePayload? p)
+    {
+        if (UserId is not int uid || p == null || p.TargetId <= 0)
+            return Task.FromResult<UserProfileDto?>(null);
+        if (p.TargetId != uid && !_db.GetContactIds(uid).Contains(p.TargetId))
+            return Task.FromResult<UserProfileDto?>(null);
+
+        string? avatarPath = _db.GetAvatarPath(p.TargetId);
+        string? avatarBase64 = null;
+        if (avatarPath != null && File.Exists(avatarPath))
+        {
+            byte[] bytes = File.ReadAllBytes(avatarPath);
+            avatarBase64 = Convert.ToBase64String(bytes);
+        }
+
+        return Task.FromResult<UserProfileDto?>(new UserProfileDto
+        {
+            UserId = p.TargetId,
+            UserName = _db.GetUserName(p.TargetId) ?? $"User {p.TargetId}",
+            Status = _db.GetUserStatus(p.TargetId),
+            Role = _db.GetUserRole(p.TargetId),
+            IsOnline = _registry.IsOnline(p.TargetId),
+            AvatarBase64 = avatarBase64
+        });
+    }
+
+    // ---------- Аудит (просмотр только Admin, требование 1.1.3) ----------
+
+    public Task<AuditLogResponsePayload?> GetAuditLog(GetAuditLogPayload? p)
+    {
+        if (!IsAdmin()) return Task.FromResult<AuditLogResponsePayload?>(null);
+
+        int limit = p is { Limit: > 0 and <= 500 } ? p.Limit : 200;
+        int offset = p is { Offset: > 0 } ? p.Offset : 0;
+
+        return Task.FromResult<AuditLogResponsePayload?>(new AuditLogResponsePayload
+        {
+            TotalCount = _db.GetAuditLogCount(),
+            Entries = _db.GetAuditLog(limit, offset)
+        });
     }
 
     // ---------- Direct-чаты ----------
@@ -398,6 +613,7 @@ public class ChatHub : Hub
             _log.ForContext("Audit", true).Information(
                 "AUDIT {Action} userId={UserId} connectionId={ConnectionId}",
                 "Logout", userId, Context.ConnectionId);
+            WriteAudit(userId, "Logout", userId, "Ok");
             await Clients.AllExcept(Context.ConnectionId).SendAsync("UserOffline",
                 new OnlineStatusPayload { UserId = userId });
         }

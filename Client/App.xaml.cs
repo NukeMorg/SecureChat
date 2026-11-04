@@ -46,7 +46,7 @@ public partial class App : Application
             if (session != null)
             {
                 var mainWindow = new MainWindow(session.UserId, session.UserName, session.Token,
-                    LoginWindow.StaticServerUrl, session.PublicKey, session.PrivateKey, Network);
+                    LoginWindow.StaticServerUrl, session.PublicKey, session.PrivateKey, session.Role, Network);
                 MainWindow = mainWindow;
                 ShutdownMode = ShutdownMode.OnMainWindowClose;
                 mainWindow.Show();
@@ -61,7 +61,8 @@ public partial class App : Application
         if (result == true && loginWindow.AuthenticatedUserId > 0)
         {
             var mainWindow = new MainWindow(loginWindow.AuthenticatedUserId, loginWindow.AuthenticatedUserName,
-                loginWindow.Token, loginWindow.ServerUrl, loginWindow.PublicKeyPem, loginWindow.PrivateKeyPem, Network);
+                loginWindow.Token, loginWindow.ServerUrl, loginWindow.PublicKeyPem, loginWindow.PrivateKeyPem,
+                loginWindow.AuthenticatedUserRole, Network);
             MainWindow = mainWindow;
             ShutdownMode = ShutdownMode.OnMainWindowClose;
             mainWindow.Show();

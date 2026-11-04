@@ -48,10 +48,11 @@ public class LoginPayload
 /// </summary>
 public class LoginResponsePayload
 {
-    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidCredentials", "EmailNotVerified", "UserNotFound"
+    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidCredentials", "RateLimited", "Banned"
     [JsonPropertyName("UserId")] public int UserId { get; set; }
     [JsonPropertyName("UserName")] public string UserName { get; set; } = "";
     [JsonPropertyName("Token")] public string Token { get; set; } = "";
+    [JsonPropertyName("Role")] public string Role { get; set; } = "Employee";
 }
 
 /// <summary>
@@ -71,9 +72,10 @@ public class RegisterAccountPayload
 /// </summary>
 public class RegisterAccountResponsePayload
 {
-    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidCode", "CodeExpired", "UserExists", "Error"
+    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidCode", "CodeExpired", "UserExists", "InvalidEmail", "WeakPassword", "InvalidUserName", "Error"
     [JsonPropertyName("AssignedId")] public int AssignedId { get; set; }
     [JsonPropertyName("Token")] public string Token { get; set; } = "";
+    [JsonPropertyName("Role")] public string Role { get; set; } = "Employee";
 }
 
 /// <summary>
@@ -93,6 +95,7 @@ public class HelloResponsePayload
     [JsonPropertyName("Status")] public string Status { get; set; } = "";
     [JsonPropertyName("UserId")] public int UserId { get; set; }
     [JsonPropertyName("UserName")] public string UserName { get; set; } = "";
+    [JsonPropertyName("Role")] public string Role { get; set; } = "Employee";
 }
 
 /// <summary>
@@ -294,4 +297,116 @@ public class HistoryResponsePayload
 public class SimpleStatusPayload
 {
     [JsonPropertyName("Status")] public string Status { get; set; } = "";
+}
+
+/// <summary>
+/// Запись журнала аудита (требование 1.7.3). Action/Result — English-константы.
+/// </summary>
+public class AuditLogEntry
+{
+    [JsonPropertyName("Id")] public long Id { get; set; }
+    [JsonPropertyName("Timestamp")] public string Timestamp { get; set; } = "";
+    [JsonPropertyName("ActorId")] public int? ActorId { get; set; }
+    [JsonPropertyName("Action")] public string Action { get; set; } = "";
+    [JsonPropertyName("TargetId")] public int? TargetId { get; set; }
+    [JsonPropertyName("Result")] public string Result { get; set; } = "";
+    [JsonPropertyName("IpAddress")] public string IpAddress { get; set; } = "";
+}
+
+/// <summary>
+/// Запрос блокировки пользователя (только Admin).
+/// </summary>
+public class BanUserPayload
+{
+    [JsonPropertyName("TargetId")] public int TargetId { get; set; }
+    [JsonPropertyName("Reason")] public string Reason { get; set; } = "";
+}
+
+/// <summary>
+/// Запрос разблокировки пользователя (только Admin).
+/// </summary>
+public class UnbanUserPayload
+{
+    [JsonPropertyName("TargetId")] public int TargetId { get; set; }
+}
+
+/// <summary>
+/// Запрос смены роли (только Admin): "Admin" | "HR" | "Employee".
+/// </summary>
+public class ChangeRolePayload
+{
+    [JsonPropertyName("TargetId")] public int TargetId { get; set; }
+    [JsonPropertyName("Role")] public string Role { get; set; } = "Employee";
+}
+
+/// <summary>
+/// Уведомление о блокировке аккаунта (сервер → заблокированный клиент).
+/// </summary>
+public class BannedPayload
+{
+    [JsonPropertyName("Reason")] public string Reason { get; set; } = "";
+}
+
+/// <summary>
+/// Смена пароля: текущий + новый. После успеха все сессии отзываются.
+/// </summary>
+public class ChangePasswordPayload
+{
+    [JsonPropertyName("CurrentPassword")] public string CurrentPassword { get; set; } = "";
+    [JsonPropertyName("NewPassword")] public string NewPassword { get; set; } = "";
+}
+
+/// <summary>
+/// Обновление статуса пользователя (≤ 100 символов, требование 1.1.4).
+/// </summary>
+public class UpdateStatusPayload
+{
+    [JsonPropertyName("Status")] public string Status { get; set; } = "";
+}
+
+/// <summary>
+/// Загрузка аватара: PNG (после клиентского re-encode), ≤ 2 МБ.
+/// </summary>
+public class UploadAvatarPayload
+{
+    [JsonPropertyName("DataBase64")] public string DataBase64 { get; set; } = "";
+}
+
+/// <summary>
+/// Запрос профиля пользователя.
+/// </summary>
+public class GetUserProfilePayload
+{
+    [JsonPropertyName("TargetId")] public int TargetId { get; set; }
+}
+
+/// <summary>
+/// Профиль пользователя: публичные данные (требование 1.1.4).
+/// </summary>
+public class UserProfileDto
+{
+    [JsonPropertyName("UserId")] public int UserId { get; set; }
+    [JsonPropertyName("UserName")] public string UserName { get; set; } = "";
+    [JsonPropertyName("Status")] public string Status { get; set; } = "";
+    [JsonPropertyName("Role")] public string Role { get; set; } = "Employee";
+    [JsonPropertyName("IsOnline")] public bool IsOnline { get; set; }
+    [JsonPropertyName("AvatarBase64")] public string? AvatarBase64 { get; set; }
+}
+
+/// <summary>
+/// Запрос журнала аудита (только Admin): постранично, свежие сверху.
+/// </summary>
+public class GetAuditLogPayload
+{
+    [JsonPropertyName("Limit")] public int Limit { get; set; } = 200;
+    [JsonPropertyName("Offset")] public int Offset { get; set; } = 0;
+}
+
+/// <summary>
+/// Ответ с журналом аудита.
+/// </summary>
+public class AuditLogResponsePayload
+{
+    [JsonPropertyName("TotalCount")] public long TotalCount { get; set; }
+    [JsonPropertyName("Entries")] public List<AuditLogEntry> Entries { get; set; } = new();
 }

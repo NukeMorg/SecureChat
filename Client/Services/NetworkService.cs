@@ -37,6 +37,7 @@ public class NetworkService
     public event Action<AddContactResponsePayload>? OnAddContactResponse;
     public event Action<int>? OnUserOnline;
     public event Action<int>? OnUserOffline;
+    public event Action<string>? OnBanned;
 
     public bool IsConnected => _hub?.State == HubConnectionState.Connected;
 
@@ -130,6 +131,61 @@ public class NetworkService
 
     public Task UpdateProfileAsync(UpdateProfilePayload payload) => InvokeAsync("UpdateProfile", payload);
 
+    // ---------- Администрирование (request/response через возвращаемое значение) ----------
+
+    public Task<SimpleStatusPayload?> BanUserAsync(BanUserPayload payload) =>
+        InvokeWithResultAsync("BanUser", payload);
+
+    public Task<SimpleStatusPayload?> UnbanUserAsync(UnbanUserPayload payload) =>
+        InvokeWithResultAsync("UnbanUser", payload);
+
+    public Task<SimpleStatusPayload?> ChangeRoleAsync(ChangeRolePayload payload) =>
+        InvokeWithResultAsync("ChangeRole", payload);
+
+    public Task<SimpleStatusPayload?> ChangePasswordAsync(ChangePasswordPayload payload) =>
+        InvokeWithResultAsync("ChangePassword", payload);
+
+    // ---------- Профиль: статус и аватар ----------
+
+    public Task<SimpleStatusPayload?> UpdateStatusAsync(UpdateStatusPayload payload) =>
+        InvokeWithResultAsync("UpdateStatus", payload);
+
+    public Task<SimpleStatusPayload?> UploadAvatarAsync(UploadAvatarPayload payload) =>
+        InvokeWithResultAsync("UploadAvatar", payload);
+
+    public Task<UserProfileDto?> GetUserProfileAsync(GetUserProfilePayload payload) =>
+        InvokeWithResultAsync<UserProfileDto>("GetUserProfile", payload);
+
+    public Task<AuditLogResponsePayload?> GetAuditLogAsync(GetAuditLogPayload payload) =>
+        InvokeWithResultAsync<AuditLogResponsePayload>("GetAuditLog", payload);
+
+    /// <summary>Вызов хаб-метода с ответом-статусом (Admin-операции, смена пароля).</summary>
+    private Task<SimpleStatusPayload?> InvokeWithResultAsync(string methodName, object payload) =>
+        InvokeWithResultAsync<SimpleStatusPayload>(methodName, payload);
+
+    /// <summary>Вызов хаб-метода с типизированным ответом.</summary>
+    private async Task<TResponse?> InvokeWithResultAsync<TResponse>(string methodName, object payload)
+    {
+        var hub = _hub;
+        if (hub == null || hub.State != HubConnectionState.Connected)
+            return default;
+
+        await _sendLock.WaitAsync();
+        try
+        {
+            return await hub.InvokeAsync<TResponse?>(methodName, payload);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Send error {Method}", methodName);
+            return default;
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
+    }
+
     /// <summary>Отзыв сессии на сервере (Logout). Сбрасывает сохранённый Hello.</summary>
     public async Task LogoutAsync()
     {
@@ -192,6 +248,7 @@ public class NetworkService
         hub.On<OnlineStatusPayload>("UserOnline", p => OnUserOnline?.Invoke(p.UserId));
         hub.On<OnlineStatusPayload>("UserOffline", p => OnUserOffline?.Invoke(p.UserId));
         hub.On<SimpleStatusPayload>("Error", p => OnError?.Invoke(p?.Status ?? "UnknownError"));
+        hub.On<BannedPayload>("Banned", p => OnBanned?.Invoke(p?.Reason ?? ""));
     }
 
     private async Task OnHubReconnected(string? connectionId)

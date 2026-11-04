@@ -1,0 +1,27 @@
+﻿<Window x:Class="SecureChat.Client.View.ProfileWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Профиль" Width="340" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource WindowBackground}"
+        Foreground="{DynamicResource ForegroundColor}">
+    <StackPanel Margin="18">
+        <Border Width="96" Height="96" CornerRadius="48"
+                Background="{DynamicResource ContactItemBackground}"
+                HorizontalAlignment="Center">
+            <Image x:Name="AvatarImage" Stretch="UniformToFill"/>
+        </Border>
+        <TextBlock x:Name="NameText" FontSize="18" FontWeight="Bold"
+                   HorizontalAlignment="Center" Margin="0,12,0,2"/>
+        <TextBlock x:Name="IdRoleText" FontSize="12" HorizontalAlignment="Center"
+                   Foreground="{DynamicResource StatusForeground}"/>
+        <TextBlock x:Name="OnlineText" FontSize="12" HorizontalAlignment="Center" Margin="0,6,0,0"
+                   Foreground="{DynamicResource StatusForeground}"/>
+        <TextBlock x:Name="StatusTextBlock" FontSize="13" TextWrapping="Wrap" TextAlignment="Center"
+                   Margin="0,10,0,0" HorizontalAlignment="Center"/>
+        <Button Content="Закрыть" Width="100" Height="28" Margin="0,16,0,0" Click="Close_Click"
+                HorizontalAlignment="Center"
+                Background="{DynamicResource InputAreaBackground}"
+                Foreground="{DynamicResource ForegroundColor}"/>
+    </StackPanel>
+</Window>
