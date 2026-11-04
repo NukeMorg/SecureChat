@@ -2,8 +2,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Security.Cryptography;
 using SecureChat.Core;
+using SecureChat.Security;
 using Serilog;
 using ILogger = Serilog.ILogger;
 
@@ -161,19 +161,20 @@ public class Database
 
     public static (string hash, string salt) HashPassword(string password)
     {
-        byte[] saltBytes = RandomNumberGenerator.GetBytes(16);
-        string salt = Convert.ToBase64String(saltBytes);
-        using var pbkdf2 = new Rfc2898DeriveBytes(password, saltBytes, 10000, HashAlgorithmName.SHA256);
-        byte[] hashBytes = pbkdf2.GetBytes(32);
-        return (Convert.ToBase64String(hashBytes), salt);
+        // Новые хэши — BCrypt; соль хранится внутри строки хэша.
+        return (PasswordHasher.Hash(password), string.Empty);
     }
 
-    public static bool VerifyPassword(string password, string storedHash, string storedSalt)
+    private void UpgradePasswordHash(int userId, string bcryptHash)
     {
-        byte[] saltBytes = Convert.FromBase64String(storedSalt);
-        using var pbkdf2 = new Rfc2898DeriveBytes(password, saltBytes, 10000, HashAlgorithmName.SHA256);
-        byte[] hashBytes = pbkdf2.GetBytes(32);
-        return Convert.ToBase64String(hashBytes) == storedHash;
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Clients SET PasswordHash = @hash, Salt = NULL WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@hash", bcryptHash);
+        cmd.Parameters.AddWithValue("@id", userId);
+        cmd.ExecuteNonQuery();
+        Log.Debug("Password hash upgraded to BCrypt for userId={UserId}", userId);
     }
 
     public (int id, string token)? RegisterUser(string email, string password, string userName, string publicKey)
@@ -219,12 +220,13 @@ public class Database
             int id = reader.GetInt32(0);
             string name = reader.GetString(1);
             string hash = reader.GetString(2);
-            string salt = reader.GetString(3);
-            if (VerifyPassword(password, hash, salt))
+            string salt = reader.IsDBNull(3) ? "" : reader.GetString(3);
+            if (PasswordHasher.VerifyAny(password, hash, salt, out string? upgradeHash))
             {
                 reader.Close();
+                if (upgradeHash != null) UpgradePasswordHash(id, upgradeHash);
                 string token = CreateSessionInternal(conn, id);
-                Log.Debug("Authenticate успешен для userId={UserId}", id);
+                Log.Debug("Authenticate successful for userId={UserId}", id);
                 return (id, name, token);
             }
         }
