@@ -12,6 +12,8 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Xps;
+using System.Printing;
 using System.Windows.Media;
 using SecureChat.Client.Models;
 using SecureChat.Client.Print;
@@ -1573,8 +1575,20 @@ public partial class MainWindow : Window
         {
             PageSize = new Size(printDialog.PrintableAreaWidth, printDialog.PrintableAreaHeight)
         };
-        printDialog.PrintDocument(paginator, $"SecureChat — {chatTitle}");
-        Log.Information("Chat printed {Chat} pages={Pages} rows={Rows}",
+
+        // Отправка на печать через XpsDocumentWriter (WPF): FlowDocument → paginator → XPS-поток принтера.
+        // PrintDialog используется только для выбора принтера и параметров.
+        PrintQueue? queue = printDialog.PrintQueue;
+        XpsDocumentWriter writer = queue != null
+            ? PrintQueue.CreateXpsDocumentWriter(queue)
+            : PrintQueue.CreateXpsDocumentWriter();
+
+        if (printDialog.PrintTicket != null)
+            writer.Write(paginator, printDialog.PrintTicket);
+        else
+            writer.Write(paginator);
+
+        Log.Information("Chat printed via XpsDocumentWriter {Chat} pages={Pages} rows={Rows}",
             chatTitle, paginator.PageCount, rows.Count);
     }
 
