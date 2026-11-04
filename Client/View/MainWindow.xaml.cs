@@ -32,6 +32,8 @@ public partial class MainWindow : Window
         "Изменить имя", nameof(ChangeNameCommand), typeof(MainWindow));
     public static readonly RoutedUICommand SearchMessagesCommand = new(
         "Поиск по сообщениям", nameof(SearchMessagesCommand), typeof(MainWindow));
+    public static readonly RoutedUICommand ReconnectCommand = new(
+        "Переподключиться", nameof(ReconnectCommand), typeof(MainWindow));
 
     private static readonly ILogger Log = Serilog.Log.ForContext<MainWindow>();
 
@@ -163,6 +165,7 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(ToggleThemeCommand, (s, e) => ToggleTheme_Click(s, e)));
         CommandBindings.Add(new CommandBinding(ChangeNameCommand, (s, e) => ChangeName_Click(s, e)));
         CommandBindings.Add(new CommandBinding(SearchMessagesCommand, (s, e) => ToggleChatSearch_Click(s, e)));
+        CommandBindings.Add(new CommandBinding(ReconnectCommand, Reconnect_Click));
         _contactsView = CollectionViewSource.GetDefaultView(_contacts);
         // единый список чатов (Telegram-style): контакты и каналы в одном ListBox
         var composite = new System.Windows.Data.CompositeCollection
@@ -428,6 +431,12 @@ public partial class MainWindow : Window
         else
             MessageBox.Show($"Не удалось сменить роль: {MapAdminError(resp?.Status)}",
                 "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    private void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        var settings = new SettingsWindow { Owner = this };
+        settings.ShowDialog();
     }
 
     private void AuditLog_Click(object sender, RoutedEventArgs e)

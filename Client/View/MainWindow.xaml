@@ -13,6 +13,7 @@
         <KeyBinding Command="{x:Static local:MainWindow.ToggleThemeCommand}" Gesture="Ctrl+T"/>
         <KeyBinding Command="{x:Static local:MainWindow.ChangeNameCommand}" Gesture="Ctrl+N"/>
         <KeyBinding Command="{x:Static local:MainWindow.SearchMessagesCommand}" Gesture="Ctrl+F"/>
+        <KeyBinding Command="{x:Static local:MainWindow.ReconnectCommand}" Gesture="Ctrl+Shift+R"/>
     </Window.InputBindings>
 
     <Window.Resources>
@@ -113,6 +114,7 @@
                 <MenuItem Header="{Binding [MiSearch], Source={StaticResource Loc}}" Command="{x:Static local:MainWindow.SearchMessagesCommand}" InputGestureText="Ctrl+F"/>
                 <Separator/>
                 <MenuItem Header="{Binding [MiToggleTheme], Source={StaticResource Loc}}" Command="{x:Static local:MainWindow.ToggleThemeCommand}" InputGestureText="Ctrl+T"/>
+                <MenuItem Header="{Binding [MiSettings], Source={StaticResource Loc}}" Click="Settings_Click"/>
             </MenuItem>
 
             <!-- Профиль -->
