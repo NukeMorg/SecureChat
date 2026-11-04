@@ -102,61 +102,61 @@
 
         <Menu Grid.Row="0" FontSize="13" Background="{DynamicResource SidebarBackground}" Foreground="{DynamicResource ForegroundColor}">
             <!-- Файл -->
-            <MenuItem Header="Файл">
-                <MenuItem Header="Печать чата..." Click="PrintChat_Click"/>
-                <MenuItem Header="Сменить учетную запись" Click="SwitchAccount_Click"/>
-                <MenuItem Header="Выход" Command="{x:Static local:MainWindow.ExitCommand}" InputGestureText="Ctrl+Q"/>
+            <MenuItem Header="{Binding [MenuFile], Source={StaticResource Loc}}">
+                <MenuItem Header="{Binding [MiPrint], Source={StaticResource Loc}}" Click="PrintChat_Click"/>
+                <MenuItem Header="{Binding [MiSwitchAccount], Source={StaticResource Loc}}" Click="SwitchAccount_Click"/>
+                <MenuItem Header="{Binding [MiExit], Source={StaticResource Loc}}" Command="{x:Static local:MainWindow.ExitCommand}" InputGestureText="Ctrl+Q"/>
             </MenuItem>
 
             <!-- Вид -->
-            <MenuItem Header="Вид">
-                <MenuItem Header="Поиск по сообщениям..." Command="{x:Static local:MainWindow.SearchMessagesCommand}" InputGestureText="Ctrl+F"/>
+            <MenuItem Header="{Binding [MenuView], Source={StaticResource Loc}}">
+                <MenuItem Header="{Binding [MiSearch], Source={StaticResource Loc}}" Command="{x:Static local:MainWindow.SearchMessagesCommand}" InputGestureText="Ctrl+F"/>
                 <Separator/>
-                <MenuItem Header="Сменить тему" Command="{x:Static local:MainWindow.ToggleThemeCommand}" InputGestureText="Ctrl+T"/>
+                <MenuItem Header="{Binding [MiToggleTheme], Source={StaticResource Loc}}" Command="{x:Static local:MainWindow.ToggleThemeCommand}" InputGestureText="Ctrl+T"/>
             </MenuItem>
 
             <!-- Профиль -->
-            <MenuItem Header="Профиль">
-                <MenuItem Header="Изменить имя..." Command="{x:Static local:MainWindow.ChangeNameCommand}" InputGestureText="Ctrl+N"/>
-                <MenuItem Header="Сменить пароль..." Click="ChangePassword_Click"/>
-                <MenuItem Header="Изменить статус..." Click="ChangeStatus_Click"/>
-                <MenuItem Header="Загрузить аватар..." Click="UploadAvatar_Click"/>
+            <MenuItem Header="{Binding [MenuProfile], Source={StaticResource Loc}}">
+                <MenuItem Header="{Binding [MiChangeName], Source={StaticResource Loc}}" Command="{x:Static local:MainWindow.ChangeNameCommand}" InputGestureText="Ctrl+N"/>
+                <MenuItem Header="{Binding [MiChangePassword], Source={StaticResource Loc}}" Click="ChangePassword_Click"/>
+                <MenuItem Header="{Binding [MiChangeStatus], Source={StaticResource Loc}}" Click="ChangeStatus_Click"/>
+                <MenuItem Header="{Binding [MiUploadAvatar], Source={StaticResource Loc}}" Click="UploadAvatar_Click"/>
                 <Separator/>
-                <MenuItem Header="Мой профиль..." Click="ShowMyProfile_Click"/>
-                <MenuItem Header="Профиль выбранного пользователя..." Click="ShowSelectedProfile_Click"/>
+                <MenuItem Header="{Binding [MiMyProfile], Source={StaticResource Loc}}" Click="ShowMyProfile_Click"/>
+                <MenuItem Header="{Binding [MiSelectedProfile], Source={StaticResource Loc}}" Click="ShowSelectedProfile_Click"/>
                 <Separator/>
-                <MenuItem Header="Показать мой публичный ключ" Click="ShowMyPublicKey_Click"/>
+                <MenuItem Header="{Binding [MiShowPublicKey], Source={StaticResource Loc}}" Click="ShowMyPublicKey_Click"/>
             </MenuItem>
 
             <!-- Администрирование (видно только роли Admin) -->
-            <MenuItem Header="Администрирование" x:Name="AdminMenu" Visibility="Collapsed">
-                <MenuItem Header="Заблокировать выбранного..." Click="BanSelectedUser_Click"/>
-                <MenuItem Header="Разблокировать выбранного..." Click="UnbanSelectedUser_Click"/>
-                <MenuItem Header="Сменить роль выбранного..." Click="ChangeRoleSelectedUser_Click"/>
+            <MenuItem Header="{Binding [MenuAdmin], Source={StaticResource Loc}}" x:Name="AdminMenu" Visibility="Collapsed">
+                <MenuItem Header="{Binding [MiBan], Source={StaticResource Loc}}" Click="BanSelectedUser_Click"/>
+                <MenuItem Header="{Binding [MiUnban], Source={StaticResource Loc}}" Click="UnbanSelectedUser_Click"/>
+                <MenuItem Header="{Binding [MiChangeRole], Source={StaticResource Loc}}" Click="ChangeRoleSelectedUser_Click"/>
                 <Separator/>
-                <MenuItem Header="Журнал аудита..." Click="AuditLog_Click"/>
+                <MenuItem Header="{Binding [MiAuditLog], Source={StaticResource Loc}}" Click="AuditLog_Click"/>
             </MenuItem>
 
             <!-- Экспорт (только клиент, расшифрованные данные текущего чата) -->
-            <MenuItem Header="Экспорт">
-                <MenuItem Header="Текущий чат в Excel..." Click="ExportExcel_Click"/>
-                <MenuItem Header="Текущий чат в Word..." Click="ExportWord_Click"/>
+            <MenuItem Header="{Binding [MenuExport], Source={StaticResource Loc}}">
+                <MenuItem Header="{Binding [MiExcel], Source={StaticResource Loc}}" Click="ExportExcel_Click"/>
+                <MenuItem Header="{Binding [MiWord], Source={StaticResource Loc}}" Click="ExportWord_Click"/>
             </MenuItem>
 
             <!-- Каналы (создание и участники — только HR/Admin) -->
-            <MenuItem Header="Каналы">
-                <MenuItem Header="Создать канал..." x:Name="ChannelCreateMenuItem" Click="CreateChannel_Click" Visibility="Collapsed"/>
-                <MenuItem Header="Добавить участника..." x:Name="ChannelAddMemberMenuItem" Click="AddChannelMember_Click" Visibility="Collapsed"/>
-                <MenuItem Header="Удалить участника..." x:Name="ChannelRemoveMemberMenuItem" Click="RemoveChannelMember_Click" Visibility="Collapsed"/>
+            <MenuItem Header="{Binding [MenuChannels], Source={StaticResource Loc}}">
+                <MenuItem Header="{Binding [MiCreateChannel], Source={StaticResource Loc}}" x:Name="ChannelCreateMenuItem" Click="CreateChannel_Click" Visibility="Collapsed"/>
+                <MenuItem Header="{Binding [MiAddMember], Source={StaticResource Loc}}" x:Name="ChannelAddMemberMenuItem" Click="AddChannelMember_Click" Visibility="Collapsed"/>
+                <MenuItem Header="{Binding [MiRemoveMember], Source={StaticResource Loc}}" x:Name="ChannelRemoveMemberMenuItem" Click="RemoveChannelMember_Click" Visibility="Collapsed"/>
                 <Separator/>
-                <MenuItem Header="Обновить список" Click="RefreshChannels_Click"/>
+                <MenuItem Header="{Binding [MiRefreshChannels], Source={StaticResource Loc}}" Click="RefreshChannels_Click"/>
             </MenuItem>
 
             <!-- Справка -->
-            <MenuItem Header="Справка">
-                <MenuItem Header="О программе" Click="About_Click"/>
+            <MenuItem Header="{Binding [MenuHelp], Source={StaticResource Loc}}">
+                <MenuItem Header="{Binding [MiAbout], Source={StaticResource Loc}}" Click="About_Click"/>
                 <Separator/>
-                <MenuItem Header="Руководство пользователя" Click="HelpGuide_Click"/>
+                <MenuItem Header="{Binding [MiUserGuide], Source={StaticResource Loc}}" Click="HelpGuide_Click"/>
             </MenuItem>
         </Menu>
 
@@ -190,7 +190,7 @@
                                  BorderBrush="{DynamicResource StatusForeground}"
                                  TextChanged="SearchAndAddTextBox_TextChanged"
                                  KeyDown="SearchAndAddTextBox_KeyDown"/>
-                        <TextBlock Text="Поиск по имени или ID + Enter..." IsHitTestVisible="False" Margin="8,6,0,0"
+                        <TextBlock Text="{Binding [SearchContactHint], Source={StaticResource Loc}}" IsHitTestVisible="False" Margin="8,6,0,0"
                                    Foreground="{DynamicResource StatusForeground}" FontSize="12">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
@@ -363,7 +363,7 @@
                         <Button Grid.Column="2" Content="➤" Click="SendButton_Click"
                                 Background="#FF1E88E5" Foreground="White" BorderThickness="0"
                                 Width="40" Height="40" FontSize="18" Margin="5"
-                                ToolTip="Отправить (Ctrl+Enter)"/>
+                                ToolTip="{Binding [SendTooltip], Source={StaticResource Loc}}"/>
                     </Grid>
                 </Border>
             </Grid>

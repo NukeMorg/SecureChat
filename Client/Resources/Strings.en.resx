@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata" id="root">
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <data name="MenuFile" xml:space="preserve"><value>File</value></data>
+  <data name="MenuView" xml:space="preserve"><value>View</value></data>
+  <data name="MenuProfile" xml:space="preserve"><value>Profile</value></data>
+  <data name="MenuAdmin" xml:space="preserve"><value>Administration</value></data>
+  <data name="MenuChannels" xml:space="preserve"><value>Channels</value></data>
+  <data name="MenuExport" xml:space="preserve"><value>Export</value></data>
+  <data name="MenuHelp" xml:space="preserve"><value>Help</value></data>
+  <data name="MiSwitchAccount" xml:space="preserve"><value>Switch account</value></data>
+  <data name="MiExit" xml:space="preserve"><value>Exit</value></data>
+  <data name="MiSearch" xml:space="preserve"><value>Search messages...</value></data>
+  <data name="MiToggleTheme" xml:space="preserve"><value>Toggle theme</value></data>
+  <data name="MiSettings" xml:space="preserve"><value>Settings...</value></data>
+  <data name="MiChangeName" xml:space="preserve"><value>Change name...</value></data>
+  <data name="MiChangePassword" xml:space="preserve"><value>Change password...</value></data>
+  <data name="MiChangeStatus" xml:space="preserve"><value>Change status...</value></data>
+  <data name="MiUploadAvatar" xml:space="preserve"><value>Upload avatar...</value></data>
+  <data name="MiMyProfile" xml:space="preserve"><value>My profile...</value></data>
+  <data name="MiSelectedProfile" xml:space="preserve"><value>Selected user profile...</value></data>
+  <data name="MiShowPublicKey" xml:space="preserve"><value>Show my public key</value></data>
+  <data name="MiPrint" xml:space="preserve"><value>Print chat...</value></data>
+  <data name="MiBan" xml:space="preserve"><value>Ban selected user...</value></data>
+  <data name="MiUnban" xml:space="preserve"><value>Unban selected user...</value></data>
+  <data name="MiChangeRole" xml:space="preserve"><value>Change role of selected user...</value></data>
+  <data name="MiAuditLog" xml:space="preserve"><value>Audit log...</value></data>
+  <data name="MiCreateChannel" xml:space="preserve"><value>Create channel...</value></data>
+  <data name="MiAddMember" xml:space="preserve"><value>Add member...</value></data>
+  <data name="MiRemoveMember" xml:space="preserve"><value>Remove member...</value></data>
+  <data name="MiRefreshChannels" xml:space="preserve"><value>Refresh list</value></data>
+  <data name="MiExcel" xml:space="preserve"><value>Current chat to Excel...</value></data>
+  <data name="MiWord" xml:space="preserve"><value>Current chat to Word...</value></data>
+  <data name="MiAbout" xml:space="preserve"><value>About</value></data>
+  <data name="MiUserGuide" xml:space="preserve"><value>User guide</value></data>
+  <data name="SearchContactHint" xml:space="preserve"><value>Search by name or ID + Enter...</value></data>
+  <data name="SendTooltip" xml:space="preserve"><value>Send (Ctrl+Enter)</value></data>
+  <data name="SelectRecipient" xml:space="preserve"><value>Select a recipient</value></data>
+  <data name="SelectChannel" xml:space="preserve"><value>Select a channel</value></data>
+  <data name="SelectChatUser" xml:space="preserve"><value>Select a user in the contact list.</value></data>
+  <data name="NoGroupKey" xml:space="preserve"><value>Channel key not received yet — wait for delivery from the owner.</value></data>
+  <data name="MessageTooLong" xml:space="preserve"><value>Message is too long: 4000 characters max.</value></data>
+  <data name="Error" xml:space="preserve"><value>Error</value></data>
+  <data name="Info" xml:space="preserve"><value>Info</value></data>
+  <data name="Export" xml:space="preserve"><value>Export</value></data>
+  <data name="Done" xml:space="preserve"><value>Done</value></data>
+</root>

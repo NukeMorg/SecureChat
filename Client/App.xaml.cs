@@ -1,6 +1,11 @@
 ﻿using System;
+using System.Globalization;
+using System.IO;
+using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Markup;
 using Microsoft.Extensions.Configuration;
 using Serilog;
 using SecureChat.Client.Services;
@@ -12,6 +17,7 @@ namespace SecureChat.Client;
 public partial class App : Application
 {
     public static string CurrentTheme { get; set; } = "Dark";
+    public static string CurrentLanguage { get; set; } = "ru";
     public static NetworkService Network { get; } = new();
 
     protected override void OnStartup(StartupEventArgs e)
@@ -27,6 +33,13 @@ public partial class App : Application
             .ReadFrom.Configuration(configuration)
             .Enrich.FromLogContext()
             .CreateLogger();
+
+        // Локализация (требование 1.8): CurrentCulture — формат данных, CurrentUICulture — строки UI.
+        // Язык UI переключается на лету; формат логов от языка не зависит (всегда English/Invariant).
+        ApplyLanguageFromConfig();
+        FrameworkElement.LanguageProperty.OverrideMetadata(typeof(FrameworkElement),
+            new FrameworkPropertyMetadata(
+                XmlLanguage.GetLanguage(CultureInfo.CurrentUICulture.IetfLanguageTag)));
 
         Log.Information("=== SecureChat Client started v2.0 on {Machine} ===", Environment.MachineName);
         AppDomain.CurrentDomain.UnhandledException += (_, ex) =>
@@ -84,6 +97,78 @@ public partial class App : Application
     }
 
     public static void ApplyTheme(string theme) => ApplyThemeInternal(theme, saveToSettings: true);
+
+    // ---------- Локализация (Лаба 8) ----------
+
+    /// <summary>Смена языка на лету: культуры потока + обновление всех Loc-привязок.</summary>
+    public static void ApplyLanguage(string language)
+    {
+        if (language != "ru" && language != "en") language = "ru";
+        CurrentLanguage = language;
+
+        var culture = new CultureInfo(language);
+        CultureInfo.DefaultThreadCurrentCulture = culture;
+        CultureInfo.DefaultThreadCurrentUICulture = culture;
+        Thread.CurrentThread.CurrentCulture = culture;
+        Thread.CurrentThread.CurrentUICulture = culture;
+
+        LocalizationSource.Instance.Refresh();
+        PersistLanguage(language);
+        Log.Information("Language switched to {Language}", language);
+    }
+
+    private static void ApplyLanguageFromConfig()
+    {
+        string saved = ReadLanguageFromConfig();
+        CurrentLanguage = saved;
+        var culture = new CultureInfo(saved);
+        CultureInfo.DefaultThreadCurrentCulture = culture;
+        CultureInfo.DefaultThreadCurrentUICulture = culture;
+        Thread.CurrentThread.CurrentCulture = culture;
+        Thread.CurrentThread.CurrentUICulture = culture;
+    }
+
+    private static string ReadLanguageFromConfig()
+    {
+        try
+        {
+            string path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "SecureChat", "config.json");
+            if (File.Exists(path))
+            {
+                var cfg = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path));
+                if (cfg != null && cfg.TryGetValue("Language", out var lang) && (lang == "ru" || lang == "en"))
+                    return lang;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to read language preference");
+        }
+        // по умолчанию — язык системы
+        return CultureInfo.InstalledUICulture.TwoLetterISOLanguageName == "ru" ? "ru" : "en";
+    }
+
+    private static void PersistLanguage(string language)
+    {
+        try
+        {
+            string dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SecureChat");
+            Directory.CreateDirectory(dir);
+            string path = Path.Combine(dir, "config.json");
+            var cfg = File.Exists(path)
+                ? JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path)) ?? new Dictionary<string, string>()
+                : new Dictionary<string, string>();
+            cfg["Language"] = language;
+            File.WriteAllText(path, JsonSerializer.Serialize(cfg));
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to persist language");
+        }
+    }
 
     private static void ApplyThemeInternal(string theme, bool saveToSettings)
     {
