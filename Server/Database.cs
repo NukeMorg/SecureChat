@@ -793,6 +793,52 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>Метаданные сообщения для маршрутизации событий edit/delete.</summary>
+    public (int senderId, int receiverId, string? channelId, string timestamp)? GetMessageInfo(string messageId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT SenderId, ReceiverId, ChannelId, Timestamp FROM Messages WHERE MessageId = @id";
+        cmd.Parameters.AddWithValue("@id", messageId);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return null;
+        return (reader.GetInt32(0), reader.GetInt32(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetString(3));
+    }
+
+    /// <summary>Редактирование: новый шифртекст + маркер IsEdited (требование 1.2.2).</summary>
+    public void UpdateMessageContent(string messageId, string nonce, string ciphertext, string tag)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            UPDATE Messages
+            SET Nonce = @nonce, Ciphertext = @ct, Tag = @tag,
+                IsEdited = 1, EditedAt = @time
+            WHERE MessageId = @id";
+        cmd.Parameters.AddWithValue("@nonce", nonce);
+        cmd.Parameters.AddWithValue("@ct", ciphertext);
+        cmd.Parameters.AddWithValue("@tag", tag);
+        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("@id", messageId);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Soft-delete: DeletedAt, шифртекст сохраняется (требование 1.2.2).</summary>
+    public void SoftDeleteMessage(string messageId)
+    {
+        using var conn = new SqliteConnection(cs);
+        conn.Open();
+        var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Messages SET DeletedAt = @time WHERE MessageId = @id";
+        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("@id", messageId);
+        cmd.ExecuteNonQuery();
+    }
+
     public int? GetSenderByMessageId(string messageId)
     {
         using var conn = new SqliteConnection(cs);

@@ -65,6 +65,9 @@ public partial class MainWindow : Window
     // Reply (Фаза D): цель ответа — применяется к текущему диалогу/каналу
     private string? _replyToMessageId;
 
+    // Edit (Фаза D): редактируемое сообщение (только Direct, окно 15 минут на сервере)
+    private string? _editingMessageId;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -111,6 +114,8 @@ public partial class MainWindow : Window
         _network.OnChannelMemberAdded += p => Dispatcher.Invoke(() => _ = RefreshChannelsAsync());
         _network.OnChannelMemberRemoved += p => Dispatcher.Invoke(() => _ = OnChannelMemberRemovedAsync(p));
         _network.OnIncomingChannelMessage += OnIncomingChannelMessage;
+        _network.OnMessageEdited += OnMessageEdited;
+        _network.OnMessageDeleted += OnMessageDeleted;
         _network.OnUserProfileUpdated += OnUserProfileUpdated;
         _network.OnUserInfoResponse += OnUserInfoResponse;
         _network.OnContactList += OnContactList;
@@ -431,6 +436,8 @@ public partial class MainWindow : Window
         "InvalidRole" => "Недопустимая роль.",
         "WrongPassword" => "Текущий пароль неверен.",
         "WeakPassword" => "Пароль: минимум 8 символов, хотя бы одна буква и одна цифра.",
+        "EditWindowExpired" => "Срок редактирования истёк (15 минут).",
+        "NotSupported" => "Редактирование доступно только в личных чатах.",
         "NotConnected" => "Нет подключения к серверу.",
         _ => "ошибка сервера."
     };
@@ -1086,6 +1093,11 @@ public partial class MainWindow : Window
 
     private void CancelReply_Click(object sender, RoutedEventArgs e)
     {
+        if (_editingMessageId != null)
+        {
+            _editingMessageId = null;
+            MessageTextBox.Clear();
+        }
         ClearReply();
     }
 
@@ -1093,6 +1105,162 @@ public partial class MainWindow : Window
     {
         _replyToMessageId = null;
         ReplyBar.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>Редактирование: новый шифртекст тем же сессионным ключом (сервер проверяет окно 15 минут).</summary>
+    private async Task EditCurrentMessageAsync(string newText)
+    {
+        if (_currentContactId <= 0 || _editingMessageId == null) return;
+
+        byte[]? sessionKey = _dialogManager.GetSessionKey(_currentContactId);
+        if (sessionKey == null)
+        {
+            MessageBox.Show("Сессионный ключ диалога недоступен.", "Ошибка",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            _editingMessageId = null;
+            ClearReply();
+            return;
+        }
+
+        var (ct, nonce, tag) = _crypto.AesGcmEncrypt(sessionKey, Encoding.UTF8.GetBytes(newText));
+        var resp = await _network.EditMessageAsync(new EditMessagePayload
+        {
+            MessageId = _editingMessageId,
+            Nonce = Convert.ToBase64String(nonce),
+            Ciphertext = Convert.ToBase64String(ct),
+            Tag = Convert.ToBase64String(tag)
+        });
+
+        if (resp?.Status == "Ok")
+        {
+            if (_allDialogs.TryGetValue(_currentContactId, out var dialog))
+            {
+                var msg = dialog.FirstOrDefault(m => m.Id == _editingMessageId);
+                if (msg != null)
+                {
+                    msg.Text = newText;
+                    msg.IsEdited = true;
+                }
+            }
+            MessagesListBox.Items.Refresh();
+            Log.Information("Message edited messageId={MessageId}", _editingMessageId);
+        }
+        else
+        {
+            MessageBox.Show($"Не удалось изменить сообщение: {MapAdminError(resp?.Status)}",
+                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+
+        _editingMessageId = null;
+        ClearReply();
+    }
+
+    // ---------- Edit / Delete (Фаза D) ----------
+
+    private void EditMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Parent is ContextMenu cm &&
+            cm.PlacementTarget is ListBoxItem item && item.DataContext is DialogMessage msg)
+        {
+            // редактирование — только свои текстовые сообщения Direct-чатов
+            if (!msg.IsOutgoing || msg.ContentType != "Text" || ListModeComboBox.SelectedIndex == 1)
+            {
+                MessageBox.Show("Изменять можно только свои текстовые сообщения в личных чатах.",
+                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            if (DateTime.Now - msg.Timestamp > TimeSpan.FromMinutes(15))
+            {
+                MessageBox.Show("Срок редактирования истёк (15 минут).",
+                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            _editingMessageId = msg.Id;
+            _replyToMessageId = null;
+            ReplyBarText.Text = "Изменение сообщения";
+            ReplyBar.Visibility = Visibility.Visible;
+            MessageTextBox.Text = msg.Text;
+            MessageTextBox.Focus();
+        }
+    }
+
+    private async void DeleteMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Parent is ContextMenu cm &&
+            cm.PlacementTarget is ListBoxItem item && item.DataContext is DialogMessage msg)
+        {
+            if (msg.IsOutgoing || _role == "Manager" || _role == "Admin")
+            {
+                var resp = await _network.DeleteMessageAsync(new DeleteMessagePayload { MessageId = msg.Id });
+                if (resp?.Status == "Ok") MarkMessageDeletedLocally(msg.Id);
+                else MessageBox.Show($"Не удалось удалить: {MapAdminError(resp?.Status)}",
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            else
+            {
+                MessageBox.Show("Удалять можно свои сообщения.",
+                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+    }
+
+    /// <summary>Локальная пометка об удалении (у второй стороны — по событию).</summary>
+    private void MarkMessageDeletedLocally(string messageId)
+    {
+        foreach (var dialog in _allDialogs.Values)
+        {
+            var msg = dialog.FirstOrDefault(m => m.Id == messageId);
+            if (msg != null)
+            {
+                msg.Text = "Сообщение удалено";
+                msg.ContentType = "Text";
+            }
+        }
+        foreach (var dialog in _allChannelMessages.Values)
+        {
+            var msg = dialog.FirstOrDefault(m => m.Id == messageId);
+            if (msg != null)
+            {
+                msg.Text = "Сообщение удалено";
+                msg.ContentType = "Text";
+            }
+        }
+        MessagesListBox.Items.Refresh();
+    }
+
+    private void OnMessageDeleted(MessageDeletedPayload payload)
+    {
+        Dispatcher.Invoke(() => MarkMessageDeletedLocally(payload.MessageId));
+    }
+
+    private void OnMessageEdited(MessageEditedPayload payload)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            foreach (var pair in _allDialogs)
+            {
+                var msg = pair.Value.FirstOrDefault(m => m.Id == payload.MessageId);
+                if (msg == null) continue;
+
+                byte[]? sessionKey = _dialogManager.GetSessionKey(pair.Key);
+                if (sessionKey == null) return;
+                try
+                {
+                    byte[] plain = _crypto.AesGcmDecrypt(sessionKey,
+                        Convert.FromBase64String(payload.Nonce),
+                        Convert.FromBase64String(payload.Ciphertext),
+                        Convert.FromBase64String(payload.Tag));
+                    msg.Text = Encoding.UTF8.GetString(plain);
+                    msg.IsEdited = true;
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Edited message decrypt failed messageId={MessageId}", payload.MessageId);
+                }
+            }
+            MessagesListBox.Items.Refresh();
+        });
     }
 
     private static string MapChannelError(string? status) => status switch
@@ -1458,6 +1626,16 @@ public partial class MainWindow : Window
 
     private async void SendButton_Click(object sender, RoutedEventArgs e)
     {
+        // режим редактирования: перешифровка текста тем же сессионным ключом
+        if (_editingMessageId != null && ListModeComboBox.SelectedIndex != 1)
+        {
+            string editText = MessageTextBox.Text.Trim();
+            if (string.IsNullOrEmpty(editText)) return;
+            await EditCurrentMessageAsync(editText);
+            MessageTextBox.Clear();
+            return;
+        }
+
         // режим «Каналы»: сообщение уходит в канал через групповой ключ
         if (ListModeComboBox.SelectedIndex == 1)
         {

@@ -232,6 +232,8 @@
                                     <Setter.Value>
                                         <ContextMenu>
                                             <MenuItem Header="Ответить" Click="ReplyToMessage_Click"/>
+                                            <MenuItem Header="Изменить..." Click="EditMessage_Click"/>
+                                            <MenuItem Header="Удалить" Click="DeleteMessage_Click"/>
                                         </ContextMenu>
                                     </Setter.Value>
                                 </Setter>
@@ -268,6 +270,8 @@
                                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
                                                 <TextBlock Text="{Binding Timestamp, StringFormat={}{0:HH:mm}}" FontSize="10"
                                                             Foreground="{DynamicResource TimestampForeground}" Margin="0,0,4,0"/>
+                                                <TextBlock Text="{Binding EditedMark}" FontSize="9"
+                                                           Foreground="{DynamicResource StatusForeground}" Margin="0,0,4,0"/>
                                                 <TextBlock Text="{Binding Status}" FontSize="9"
                                                            Foreground="{DynamicResource StatusForeground}"
                                                            Visibility="{Binding IsOutgoing, Converter={StaticResource BoolToVisibilityConverter}}"/>

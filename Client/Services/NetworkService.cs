@@ -42,6 +42,8 @@ public class NetworkService
     public event Action<ChannelMemberAddedPayload>? OnChannelMemberAdded;
     public event Action<ChannelMemberRemovedPayload>? OnChannelMemberRemoved;
     public event Action<IncomingChannelMessagePayload>? OnIncomingChannelMessage;
+    public event Action<MessageEditedPayload>? OnMessageEdited;
+    public event Action<MessageDeletedPayload>? OnMessageDeleted;
 
     public bool IsConnected => _hub?.State == HubConnectionState.Connected;
 
@@ -199,6 +201,14 @@ public class NetworkService
     public Task<ChannelHistoryResponsePayload?> GetChannelHistoryAsync(GetChannelHistoryPayload payload) =>
         InvokeWithResultAsync<ChannelHistoryResponsePayload>("GetChannelHistory", payload);
 
+    // ---------- Редактирование и удаление (Фаза D) ----------
+
+    public Task<SimpleStatusPayload?> EditMessageAsync(EditMessagePayload payload) =>
+        InvokeWithResultAsync("EditMessage", payload);
+
+    public Task<SimpleStatusPayload?> DeleteMessageAsync(DeleteMessagePayload payload) =>
+        InvokeWithResultAsync("DeleteMessage", payload);
+
     /// <summary>Вызов хаб-метода с ответом-статусом (Admin-операции, смена пароля).</summary>
     private Task<SimpleStatusPayload?> InvokeWithResultAsync(string methodName, object payload) =>
         InvokeWithResultAsync<SimpleStatusPayload>(methodName, payload);
@@ -295,6 +305,8 @@ public class NetworkService
         hub.On<ChannelMemberAddedPayload>("ChannelMemberAdded", p => OnChannelMemberAdded?.Invoke(p));
         hub.On<ChannelMemberRemovedPayload>("ChannelMemberRemoved", p => OnChannelMemberRemoved?.Invoke(p));
         hub.On<IncomingChannelMessagePayload>("IncomingChannelMessage", p => OnIncomingChannelMessage?.Invoke(p));
+        hub.On<MessageEditedPayload>("MessageEdited", p => OnMessageEdited?.Invoke(p));
+        hub.On<MessageDeletedPayload>("MessageDeleted", p => OnMessageDeleted?.Invoke(p));
     }
 
     private async Task OnHubReconnected(string? connectionId)

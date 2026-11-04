@@ -5,6 +5,7 @@ using Serilog;
 using ILogger = Serilog.ILogger;
 using Serilog.Context;
 using System.Diagnostics;
+using System.Globalization;
 
 namespace SecureChat.Server;
 
@@ -769,6 +770,82 @@ public class ChatHub : Hub
             Messages = messages,
             HasMore = hasMore
         });
+    }
+
+    // ---------- Редактирование и удаление (Фаза D, требование 1.2.2) ----------
+
+    public async Task<SimpleStatusPayload> EditMessage(EditMessagePayload? p)
+    {
+        if (UserId is not int uid || p == null || string.IsNullOrEmpty(p.MessageId))
+            return new SimpleStatusPayload { Status = "Error" };
+
+        var info = _db.GetMessageInfo(p.MessageId);
+        if (info == null || info.Value.senderId != uid) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (info.Value.channelId != null)
+            return new SimpleStatusPayload { Status = "NotSupported" }; // ratchet каналов не позволяет перешифровать старую итерацию
+
+        // окно редактирования 15 минут
+        var timestamp = DateTime.Parse(info.Value.timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        if (DateTime.UtcNow - timestamp > TimeSpan.FromMinutes(15))
+        {
+            WriteAudit(uid, "EditMessage", info.Value.receiverId, "EditWindowExpired");
+            return new SimpleStatusPayload { Status = "EditWindowExpired" };
+        }
+        if (string.IsNullOrEmpty(p.Ciphertext) || string.IsNullOrEmpty(p.Nonce) || string.IsNullOrEmpty(p.Tag))
+            return new SimpleStatusPayload { Status = "Error" };
+
+        _db.UpdateMessageContent(p.MessageId, p.Nonce, p.Ciphertext, p.Tag);
+
+        var receiverConns = _registry.GetConnections(info.Value.receiverId);
+        if (receiverConns.Count > 0)
+        {
+            await Clients.Clients(receiverConns).SendAsync("MessageEdited", new MessageEditedPayload
+            {
+                MessageId = p.MessageId,
+                Nonce = p.Nonce,
+                Ciphertext = p.Ciphertext,
+                Tag = p.Tag
+            });
+        }
+
+        _log.Information("Message edited messageId={MessageId} userId={UserId}", p.MessageId, uid);
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
+    public async Task<SimpleStatusPayload> DeleteMessage(DeleteMessagePayload? p)
+    {
+        if (UserId is not int uid || p == null || string.IsNullOrEmpty(p.MessageId))
+            return new SimpleStatusPayload { Status = "Error" };
+
+        var info = _db.GetMessageInfo(p.MessageId);
+        if (info == null) return new SimpleStatusPayload { Status = "NotFound" };
+
+        bool isAuthor = info.Value.senderId == uid;
+        bool isAdmin = IsAdmin();
+        if (!isAuthor && !isAdmin) return new SimpleStatusPayload { Status = "Forbidden" };
+
+        _db.SoftDeleteMessage(p.MessageId);
+        WriteAudit(uid, "DeleteMessage", info.Value.senderId, "Ok");
+        _log.ForContext("Audit", true).Information(
+            "AUDIT {Action} userId={UserId} messageId={MessageId} authorId={AuthorId} byAdmin={ByAdmin}",
+            "DeleteMessage", uid, p.MessageId, info.Value.senderId, !isAuthor);
+
+        if (info.Value.channelId != null)
+        {
+            await Clients.Group(info.Value.channelId).SendAsync("MessageDeleted",
+                new MessageDeletedPayload { MessageId = p.MessageId });
+        }
+        else
+        {
+            var targets = new List<string>();
+            targets.AddRange(_registry.GetConnections(info.Value.receiverId));
+            if (!isAuthor) targets.AddRange(_registry.GetConnections(info.Value.senderId));
+            if (targets.Count > 0)
+                await Clients.Clients(targets.Distinct()).SendAsync("MessageDeleted",
+                    new MessageDeletedPayload { MessageId = p.MessageId });
+        }
+
+        return new SimpleStatusPayload { Status = "Ok" };
     }
 
     // ---------- Профиль и контакты ----------

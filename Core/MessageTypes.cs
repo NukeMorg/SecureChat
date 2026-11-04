@@ -308,6 +308,41 @@ public class SimpleStatusPayload
 }
 
 /// <summary>
+/// Редактирование сообщения (только автор, окно 15 минут): новый шифртекст AES-GCM.
+/// Поддерживается только для Direct-чатов (в каналах ratchet не позволяет перешифровать старую итерацию).
+/// </summary>
+public class EditMessagePayload
+{
+    [JsonPropertyName("MessageId")] public string MessageId { get; set; } = "";
+    [JsonPropertyName("Nonce")] public string Nonce { get; set; } = "";
+    [JsonPropertyName("Ciphertext")] public string Ciphertext { get; set; } = "";
+    [JsonPropertyName("Tag")] public string Tag { get; set; } = "";
+}
+
+/// <summary>
+/// Удаление сообщения: автор — своё, Admin — любое (с аудитом). Soft-delete.
+/// </summary>
+public class DeleteMessagePayload
+{
+    [JsonPropertyName("MessageId")] public string MessageId { get; set; } = "";
+}
+
+/// <summary>Событие: сообщение отредактировано (новый шифртекст для расшифровки).</summary>
+public class MessageEditedPayload
+{
+    [JsonPropertyName("MessageId")] public string MessageId { get; set; } = "";
+    [JsonPropertyName("Nonce")] public string Nonce { get; set; } = "";
+    [JsonPropertyName("Ciphertext")] public string Ciphertext { get; set; } = "";
+    [JsonPropertyName("Tag")] public string Tag { get; set; } = "";
+}
+
+/// <summary>Событие: сообщение удалено (soft-delete).</summary>
+public class MessageDeletedPayload
+{
+    [JsonPropertyName("MessageId")] public string MessageId { get; set; } = "";
+}
+
+/// <summary>
 /// Запись журнала аудита (требование 1.7.3). Action/Result — English-константы.
 /// </summary>
 public class AuditLogEntry
