@@ -108,8 +108,21 @@ public class Database
         {
             ApplyV2(conn); // каналы: Channels/ChannelMembers/ChannelKeys; сообщения: ChannelId и др.
         }
+        if (version < 3)
+        {
+            ApplyV3(conn); // роль HR переименована в Manager (данные + протокол)
+        }
 
-        SetUserVersion(conn, Math.Max(version, 2));
+        SetUserVersion(conn, Math.Max(version, 3));
+    }
+
+    /// <summary>Миграция v3: переименование роли HR → Manager во всех данных.</summary>
+    private void ApplyV3(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Clients SET Role = 'Manager' WHERE Role = 'HR';";
+        int rows = cmd.ExecuteNonQuery();
+        Log.Information("Role renamed HR to Manager for {Count} clients", rows);
     }
 
     /// <summary>
