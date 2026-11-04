@@ -638,7 +638,8 @@ public class ChatHub : Hub
 
         _db.SaveChannelMessage(p.MessageId, p.ChannelId, senderId,
             p.EncryptedData.Nonce, p.EncryptedData.Ciphertext, p.EncryptedData.Tag,
-            p.ContentType, p.FileName, p.FileSize, p.FileTransferId, p.ChainIteration);
+            p.ContentType, p.FileName, p.FileSize, p.FileTransferId, p.ChainIteration,
+            p.ReplyToMessageId);
 
         await Clients.OthersInGroup(p.ChannelId).SendAsync("IncomingChannelMessage",
             new IncomingChannelMessagePayload
@@ -651,7 +652,8 @@ public class ChatHub : Hub
                 ContentType = p.ContentType,
                 FileName = p.FileName,
                 FileSize = p.FileSize,
-                Timestamp = DateTime.UtcNow.ToString("o")
+                Timestamp = DateTime.UtcNow.ToString("o"),
+                ReplyToMessageId = p.ReplyToMessageId
             });
 
         _log.Information("Channel message channelId={ChannelId} senderId={SenderId} type={ContentType} size={Size}B messageId={MessageId}",
@@ -704,7 +706,8 @@ public class ChatHub : Hub
 
             _db.SaveMessage(p.MessageId, senderId.Value, p.ReceiverId, p.EncryptedKey,
                 p.EncryptedData?.Nonce, p.EncryptedData?.Ciphertext, p.EncryptedData?.Tag,
-                p.ContentType, p.FileName, p.FileSize, p.FileTransferId, "Sent", p.EncryptedKeySelf);
+                p.ContentType, p.FileName, p.FileSize, p.FileTransferId, "Sent", p.EncryptedKeySelf,
+                p.ReplyToMessageId);
             _db.AddContact(senderId.Value, p.ReceiverId);
 
             var receiverConns = _registry.GetConnections(p.ReceiverId);
@@ -720,7 +723,8 @@ public class ChatHub : Hub
                     ContentType = p.ContentType,
                     FileName = p.FileName,
                     FileSize = p.FileSize,
-                    FileTransferId = p.FileTransferId
+                    FileTransferId = p.FileTransferId,
+                    ReplyToMessageId = p.ReplyToMessageId
                 });
                 await Respond("DeliveryStatus", new DeliveryStatusPayload { MessageId = p.MessageId, Status = "Sent" });
             }

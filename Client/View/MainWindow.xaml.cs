@@ -62,6 +62,9 @@ public partial class MainWindow : Window
     private int _currentContactId = -1;
     private Dictionary<int, string> _contactPublicKeys = new();
 
+    // Reply (Фаза D): цель ответа — применяется к текущему диалогу/каналу
+    private string? _replyToMessageId;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -850,7 +853,7 @@ public partial class MainWindow : Window
                     Convert.FromBase64String(msg.EncryptedData.Ciphertext),
                     Convert.FromBase64String(msg.EncryptedData.Tag));
 
-                AddChannelMessage(msg.ChannelId, new DialogMessage
+                var dm = new DialogMessage
                 {
                     Id = msg.MessageId,
                     SenderId = msg.SenderId,
@@ -859,8 +862,12 @@ public partial class MainWindow : Window
                     Status = "",
                     IsOutgoing = msg.SenderId == _clientId,
                     SenderName = msg.SenderId == _clientId ? "" : GetChannelMemberName(msg.ChannelId, msg.SenderId),
-                    Timestamp = DateTime.Parse(msg.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
-                });
+                    Timestamp = DateTime.Parse(msg.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    ReplyToMessageId = msg.ReplyToMessageId
+                };
+                if (_allChannelMessages.TryGetValue(msg.ChannelId, out var chanCol))
+                    ApplyReplyPreview(dm, chanCol);
+                AddChannelMessage(msg.ChannelId, dm);
             }
             catch (Exception ex)
             {
@@ -886,7 +893,7 @@ public partial class MainWindow : Window
         var (ct, nonce, tag) = _crypto.AesGcmEncrypt(messageKey, plain);
         string msgId = Guid.NewGuid().ToString();
 
-        AddChannelMessage(channelId, new DialogMessage
+        var outgoing = new DialogMessage
         {
             Id = msgId,
             SenderId = _clientId,
@@ -894,8 +901,12 @@ public partial class MainWindow : Window
             ContentType = "Text",
             Status = "",
             IsOutgoing = true,
-            Timestamp = DateTime.Now
-        });
+            Timestamp = DateTime.Now,
+            ReplyToMessageId = _replyToMessageId
+        };
+        if (_allChannelMessages.TryGetValue(channelId, out var replyCol))
+            ApplyReplyPreview(outgoing, replyCol);
+        AddChannelMessage(channelId, outgoing);
 
         await _network.SendChannelMessageAsync(new SendChannelMessagePayload
         {
@@ -908,11 +919,15 @@ public partial class MainWindow : Window
                 Ciphertext = Convert.ToBase64String(ct),
                 Tag = Convert.ToBase64String(tag)
             },
-            ContentType = "Text"
+            ContentType = "Text",
+            ReplyToMessageId = _replyToMessageId
         });
 
         Log.Information("Channel message sent channelId={ChannelId} length={Length} iteration={Iteration} messageId={MessageId}",
             channelId, text.Length, iteration, msgId);
+
+        MessageTextBox.Clear();
+        ClearReply();
     }
 
     /// <summary>Отправка файла в канал: ≤10 МБ, шифрование MessageKey из ratchet.</summary>
@@ -1023,6 +1038,61 @@ public partial class MainWindow : Window
             Log.Warning(ex, "Channel file decrypt failed channelId={ChannelId} messageId={MessageId}",
                 msg.ChannelId, msg.MessageId);
         }
+    }
+
+    // ---------- Reply (Фаза D) ----------
+
+    /// <summary>Цитата строится локально: сервер не видит plaintext (E2E).</summary>
+    private void ApplyReplyPreview(DialogMessage dm, IEnumerable<DialogMessage> collection)
+    {
+        if (string.IsNullOrEmpty(dm.ReplyToMessageId)) return;
+        var original = collection.FirstOrDefault(m => m.Id == dm.ReplyToMessageId);
+        if (original == null)
+        {
+            dm.ReplyPreview = "↩ ответ на сообщение";
+            return;
+        }
+        string author = original.IsOutgoing ? _userName : ResolveSenderName(original);
+        string text = original.ContentType == "Text" ? original.Text : (original.FilePath ?? "файл");
+        if (text.Length > 100) text = text[..100] + "…";
+        dm.ReplyPreview = $"↩ {author}: {text}";
+    }
+
+    private string ResolveSenderName(DialogMessage msg)
+    {
+        if (ListModeComboBox.SelectedIndex == 1 && _currentChannel != null)
+            return GetChannelMemberName(_currentChannel.Id, msg.SenderId);
+        var contact = _contacts.FirstOrDefault(c => c.Id == msg.SenderId);
+        return contact != null ? contact.RawName : $"User {msg.SenderId}";
+    }
+
+    private void StartReply(DialogMessage msg)
+    {
+        _replyToMessageId = msg.Id;
+        string author = msg.IsOutgoing ? _userName : ResolveSenderName(msg);
+        string preview = msg.ContentType == "Text" ? msg.Text : (msg.FilePath ?? "файл");
+        if (preview.Length > 100) preview = preview[..100] + "…";
+        ReplyBarText.Text = $"Ответ на: {author}: {preview}";
+        ReplyBar.Visibility = Visibility.Visible;
+        MessageTextBox.Focus();
+    }
+
+    private void ReplyToMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.Parent is ContextMenu cm &&
+            cm.PlacementTarget is ListBoxItem item && item.DataContext is DialogMessage msg)
+            StartReply(msg);
+    }
+
+    private void CancelReply_Click(object sender, RoutedEventArgs e)
+    {
+        ClearReply();
+    }
+
+    private void ClearReply()
+    {
+        _replyToMessageId = null;
+        ReplyBar.Visibility = Visibility.Collapsed;
     }
 
     private static string MapChannelError(string? status) => status switch
@@ -1175,6 +1245,7 @@ public partial class MainWindow : Window
                 }
                 dm.IsEdited = hm.IsEdited;
                 dm.ReplyToMessageId = hm.ReplyToMessageId;
+                ApplyReplyPreview(dm, dialog);
 
                 if (loadMore) dialog.Insert(0, dm); // «ещё» — старые сообщения сверху
                 else dialog.Add(dm);
@@ -1272,7 +1343,7 @@ public partial class MainWindow : Window
                 byte[] t = Convert.FromBase64String(msg.EncryptedData.Tag);
                 byte[] plain = _crypto.AesGcmDecrypt(sessionKey, n, ct, t);
 
-                AddMessage(msg.SenderId, new DialogMessage
+                var incoming = new DialogMessage
                 {
                     Id = msg.MessageId,
                     SenderId = msg.SenderId,
@@ -1281,8 +1352,12 @@ public partial class MainWindow : Window
                     ContentType = "Text",
                     Status = "✓✓",
                     IsOutgoing = false,
-                    Timestamp = DateTime.Now
-                });
+                    Timestamp = DateTime.Now,
+                    ReplyToMessageId = msg.ReplyToMessageId
+                };
+                if (_allDialogs.TryGetValue(msg.SenderId, out var col))
+                    ApplyReplyPreview(incoming, col);
+                AddMessage(msg.SenderId, incoming);
 
                 _ = _network.AckAsync(new AckPayload { MessageId = msg.MessageId, Status = "Delivered" });
             }
@@ -1431,7 +1506,7 @@ public partial class MainWindow : Window
             var (ct, nonce, tag) = _crypto.AesGcmEncrypt(sessionKey, plain);
             var msgId = Guid.NewGuid().ToString();
 
-            AddMessage(_currentContactId, new DialogMessage
+            var outgoing = new DialogMessage
             {
                 Id = msgId,
                 SenderId = _clientId,
@@ -1440,8 +1515,12 @@ public partial class MainWindow : Window
                 ContentType = "Text",
                 Status = "Отправка...",
                 IsOutgoing = true,
-                Timestamp = DateTime.Now
-            });
+                Timestamp = DateTime.Now,
+                ReplyToMessageId = _replyToMessageId
+            };
+            if (_allDialogs.TryGetValue(_currentContactId, out var replyCol))
+                ApplyReplyPreview(outgoing, replyCol);
+            AddMessage(_currentContactId, outgoing);
 
             await _network.SendMessageAsync(new SendMessagePayload
             {
@@ -1455,13 +1534,15 @@ public partial class MainWindow : Window
                     Ciphertext = Convert.ToBase64String(ct),
                     Tag = Convert.ToBase64String(tag)
                 },
-                ContentType = "Text"
+                ContentType = "Text",
+                ReplyToMessageId = _replyToMessageId
             });
 
             Log.Information("Message sent to userId={ReceiverId} length={Length} messageId={MessageId}",
                 _currentContactId, text.Length, msgId);
 
             MessageTextBox.Clear();
+            ClearReply();
         }
         catch (Exception ex)
         {

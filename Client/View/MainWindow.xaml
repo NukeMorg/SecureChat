@@ -215,6 +215,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
                 <Border Background="{DynamicResource ChatAreaBackground}" CornerRadius="8" Padding="8">
@@ -223,6 +224,19 @@
                                  Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
                                  BorderThickness="0"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="ContextMenu">
+                                    <Setter.Value>
+                                        <ContextMenu>
+                                            <MenuItem Header="Ответить" Click="ReplyToMessage_Click"/>
+                                        </ContextMenu>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Grid HorizontalAlignment="{Binding IsOutgoing, Converter={StaticResource BoolToHorizontalAlignmentConverter}}" Margin="4">
@@ -241,6 +255,9 @@
                                             <TextBlock Text="{Binding SenderName}" FontWeight="SemiBold" FontSize="11"
                                                        Foreground="{DynamicResource StatusForeground}"
                                                        Visibility="{Binding HasSenderName, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                            <TextBlock Text="{Binding ReplyPreview}" FontSize="11" FontStyle="Italic"
+                                                       Foreground="{DynamicResource StatusForeground}" TextWrapping="Wrap"
+                                                       Visibility="{Binding HasReply, Converter={StaticResource BoolToVisibilityConverter}}"/>
                                             <TextBlock Text="{Binding Text}" Visibility="{Binding TextVisibility}"
                                                        Foreground="{DynamicResource MessageTextForeground}" FontSize="13" TextWrapping="Wrap"/>
                                             <StackPanel Orientation="Horizontal" Visibility="{Binding FileVisibility}">
@@ -268,7 +285,24 @@
                     </Grid>
                 </Border>
 
-                <Border Grid.Row="1" Background="{DynamicResource InputAreaBackground}" CornerRadius="8" Padding="5" Margin="0,5,0,0">
+                <!-- Панель ответа/редактирования -->
+                <Border Grid.Row="1" x:Name="ReplyBar" Visibility="Collapsed"
+                        Background="{DynamicResource InputAreaBackground}" CornerRadius="8"
+                        Padding="8,5" Margin="0,5,0,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="ReplyBarText" TextTrimming="CharacterEllipsis" FontSize="12"
+                                   Foreground="{DynamicResource StatusForeground}" VerticalAlignment="Center"/>
+                        <Button Grid.Column="1" Content="✕" Click="CancelReply_Click"
+                                Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
+                                BorderThickness="0" Width="24" Height="24"/>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="2" Background="{DynamicResource InputAreaBackground}" CornerRadius="8" Padding="5" Margin="0,5,0,0">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>

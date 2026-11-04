@@ -737,7 +737,7 @@ public class Database
     public void SaveMessage(string messageId, int senderId, int receiverId,
                             string? encryptedKey, string? nonce, string? ciphertext, string? tag,
                             string contentType, string? fileName, long fileSize, string? fileTransferId,
-                            string status = "Sent", string? encryptedKeySelf = null)
+                            string status = "Sent", string? encryptedKeySelf = null, string? replyToMessageId = null)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         using var conn = new SqliteConnection(cs);
@@ -746,9 +746,9 @@ public class Database
         cmd.CommandText = @"
             INSERT INTO Messages
             (MessageId, SenderId, ReceiverId, EncryptedKey, Nonce, Ciphertext, Tag,
-             ContentType, FileName, FileSize, FileTransferId, Timestamp, Status, EncryptedKeySelf)
+             ContentType, FileName, FileSize, FileTransferId, Timestamp, Status, EncryptedKeySelf, ReplyToMessageId)
             VALUES (@msgId, @sender, @receiver, @encKey, @nonce, @ct, @tag,
-                    @ctype, @fname, @fsize, @ftransfer, @time, @status, @encKeySelf)
+                    @ctype, @fname, @fsize, @ftransfer, @time, @status, @encKeySelf, @replyTo)
             ON CONFLICT(MessageId) DO UPDATE SET
                 EncryptedKey = excluded.EncryptedKey,
                 EncryptedKeySelf = excluded.EncryptedKeySelf,
@@ -775,6 +775,7 @@ public class Database
         cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
         cmd.Parameters.AddWithValue("@status", status);
         cmd.Parameters.AddWithValue("@encKeySelf", (object?)encryptedKeySelf ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@replyTo", (object?)replyToMessageId ?? DBNull.Value);
         cmd.ExecuteNonQuery();
         sw.Stop();
         if (sw.ElapsedMilliseconds > 100)
@@ -1124,7 +1125,7 @@ public class Database
     public void SaveChannelMessage(string messageId, string channelId, int senderId,
         string? nonce, string? ciphertext, string? tag,
         string contentType, string? fileName, long fileSize, string? fileTransferId,
-        long chainIteration)
+        long chainIteration, string? replyToMessageId = null)
     {
         using var conn = new SqliteConnection(cs);
         conn.Open();
@@ -1132,9 +1133,9 @@ public class Database
         cmd.CommandText = @"
             INSERT INTO Messages
             (MessageId, SenderId, ReceiverId, ChannelId, Nonce, Ciphertext, Tag,
-             ContentType, FileName, FileSize, FileTransferId, ChainIteration, Timestamp, Status)
+             ContentType, FileName, FileSize, FileTransferId, ChainIteration, Timestamp, Status, ReplyToMessageId)
             VALUES (@msgId, @sender, 0, @channel, @nonce, @ct, @tag,
-                    @ctype, @fname, @fsize, @ftransfer, @iter, @time, 'Sent')
+                    @ctype, @fname, @fsize, @ftransfer, @iter, @time, 'Sent', @replyTo)
             ON CONFLICT(MessageId) DO NOTHING;";
         cmd.Parameters.AddWithValue("@msgId", messageId);
         cmd.Parameters.AddWithValue("@sender", senderId);
@@ -1148,6 +1149,7 @@ public class Database
         cmd.Parameters.AddWithValue("@ftransfer", (object?)fileTransferId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@iter", chainIteration);
         cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
+        cmd.Parameters.AddWithValue("@replyTo", (object?)replyToMessageId ?? DBNull.Value);
         cmd.ExecuteNonQuery();
     }
 

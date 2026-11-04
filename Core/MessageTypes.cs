@@ -158,6 +158,7 @@ public class SendMessagePayload
     [JsonPropertyName("FileName")] public string? FileName { get; set; }
     [JsonPropertyName("FileSize")] public long FileSize { get; set; }
     [JsonPropertyName("FileTransferId")] public string? FileTransferId { get; set; }
+    [JsonPropertyName("ReplyToMessageId")] public string? ReplyToMessageId { get; set; }
 }
 
 /// <summary>
@@ -173,6 +174,7 @@ public class IncomingMessagePayload
     [JsonPropertyName("FileName")] public string? FileName { get; set; }
     [JsonPropertyName("FileSize")] public long FileSize { get; set; }
     [JsonPropertyName("FileTransferId")] public string? FileTransferId { get; set; }
+    [JsonPropertyName("ReplyToMessageId")] public string? ReplyToMessageId { get; set; }
 }
 
 /// <summary>
