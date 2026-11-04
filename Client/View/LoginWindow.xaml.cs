@@ -252,11 +252,7 @@ public partial class LoginWindow : Window
                 await Network.ConnectAsync(StaticServerUrl);
 
             _loginTcs = new TaskCompletionSource<LoginResponsePayload>();
-            await Network.SendAsync(new
-            {
-                Type = "Login",
-                Payload = new LoginPayload { Email = email, Password = password }
-            });
+            await Network.LoginAsync(new LoginPayload { Email = email, Password = password });
 
             var completed = await Task.WhenAny(_loginTcs.Task, Task.Delay(8000));
             if (completed != _loginTcs.Task)
@@ -344,11 +340,7 @@ public partial class LoginWindow : Window
                 await Network.ConnectAsync(StaticServerUrl);
 
             _codeTcs = new TaskCompletionSource<SendEmailCodeResponsePayload>();
-            await Network.SendAsync(new
-            {
-                Type = "SendEmailCode",
-                Payload = new SendEmailCodePayload { Email = email, Purpose = "Register" }
-            });
+            await Network.SendEmailCodeAsync(new SendEmailCodePayload { Email = email, Purpose = "Register" });
 
             var completed = await Task.WhenAny(_codeTcs.Task, Task.Delay(8000));
             if (completed != _codeTcs.Task)
@@ -428,17 +420,13 @@ public partial class LoginWindow : Window
             }
 
             _registerTcs = new TaskCompletionSource<RegisterAccountResponsePayload>();
-            await Network.SendAsync(new
+            await Network.RegisterAccountAsync(new RegisterAccountPayload
             {
-                Type = "RegisterAccount",
-                Payload = new RegisterAccountPayload
-                {
-                    Email = _pendingEmail,
-                    Code = code,
-                    Password = _pendingPassword,
-                    UserName = _pendingName,
-                    PublicKey = PublicKeyPem
-                }
+                Email = _pendingEmail,
+                Code = code,
+                Password = _pendingPassword,
+                UserName = _pendingName,
+                PublicKey = PublicKeyPem
             });
 
             var completed = await Task.WhenAny(_registerTcs.Task, Task.Delay(8000));
@@ -507,11 +495,7 @@ public partial class LoginWindow : Window
                 await Network.ConnectAsync(StaticServerUrl);
 
             _codeTcs = new TaskCompletionSource<SendEmailCodeResponsePayload>();
-            await Network.SendAsync(new
-            {
-                Type = "SendEmailCode",
-                Payload = new SendEmailCodePayload { Email = _pendingEmail, Purpose = "Register" }
-            });
+            await Network.SendEmailCodeAsync(new SendEmailCodePayload { Email = _pendingEmail, Purpose = "Register" });
 
             var completed = await Task.WhenAny(_codeTcs.Task, Task.Delay(8000));
             if (completed == _codeTcs.Task)
@@ -658,11 +642,7 @@ public partial class LoginWindow : Window
                     network.OnHelloResponse += handler;
                     try
                     {
-                        await network.SendAsync(new
-                        {
-                            Type = "Hello",
-                            Payload = new HelloPayload { ClientId = saved.UserId, Token = saved.Token }
-                        });
+                        await network.HelloAsync(new HelloPayload { ClientId = saved.UserId, Token = saved.Token });
 
                         var resp = await tcs.Task.WaitAsync(cts.Token);
                         if (resp == null || resp.Status != "Ok") return null;
