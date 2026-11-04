@@ -32,6 +32,8 @@ public partial class MainWindow : Window
         "Изменить имя", nameof(ChangeNameCommand), typeof(MainWindow));
     public static readonly RoutedUICommand SearchMessagesCommand = new(
         "Поиск по сообщениям", nameof(SearchMessagesCommand), typeof(MainWindow));
+    public static readonly RoutedUICommand ReconnectCommand = new(
+        "Переподключиться", nameof(ReconnectCommand), typeof(MainWindow));
 
     private static readonly ILogger Log = Serilog.Log.ForContext<MainWindow>();
 
@@ -163,6 +165,7 @@ public partial class MainWindow : Window
         CommandBindings.Add(new CommandBinding(ToggleThemeCommand, (s, e) => ToggleTheme_Click(s, e)));
         CommandBindings.Add(new CommandBinding(ChangeNameCommand, (s, e) => ChangeName_Click(s, e)));
         CommandBindings.Add(new CommandBinding(SearchMessagesCommand, (s, e) => ToggleChatSearch_Click(s, e)));
+        CommandBindings.Add(new CommandBinding(ReconnectCommand, Reconnect_Click));
         _contactsView = CollectionViewSource.GetDefaultView(_contacts);
         // единый список чатов (Telegram-style): контакты и каналы в одном ListBox
         var composite = new System.Windows.Data.CompositeCollection
@@ -430,6 +433,12 @@ public partial class MainWindow : Window
                 "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
+    private void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        var settings = new SettingsWindow { Owner = this };
+        settings.ShowDialog();
+    }
+
     private void AuditLog_Click(object sender, RoutedEventArgs e)
     {
         var window = new AuditLogWindow(_network) { Owner = this };
@@ -600,7 +609,7 @@ public partial class MainWindow : Window
     {
         if (ContactsListBox.SelectedItem is not ChannelItem channel)
         {
-            MessageBox.Show("Выберите канал в списке (режим «Каналы»).", "Каналы",
+            MessageBox.Show(LocalizationSource.Get("SelectChannel"), LocalizationSource.Get("MenuChannels"),
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -644,7 +653,7 @@ public partial class MainWindow : Window
     {
         if (ContactsListBox.SelectedItem is not ChannelItem channel)
         {
-            MessageBox.Show("Выберите канал в списке (режим «Каналы»).", "Каналы",
+            MessageBox.Show(LocalizationSource.Get("SelectChannel"), LocalizationSource.Get("MenuChannels"),
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -944,7 +953,7 @@ public partial class MainWindow : Window
     {
         if (_currentChannel == null)
         {
-            MessageBox.Show("Выберите канал", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(LocalizationSource.Get("SelectChannel"), LocalizationSource.Get("Info"), MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -1168,13 +1177,13 @@ public partial class MainWindow : Window
             if (!msg.IsOutgoing || msg.ContentType != "Text" || _currentChannel != null)
             {
                 MessageBox.Show("Изменять можно только свои текстовые сообщения в личных чатах.",
-                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                    LocalizationSource.Get("Info"), MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
             if (DateTime.Now - msg.Timestamp > TimeSpan.FromMinutes(15))
             {
                 MessageBox.Show("Срок редактирования истёк (15 минут).",
-                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                    LocalizationSource.Get("Info"), MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
@@ -1202,7 +1211,7 @@ public partial class MainWindow : Window
             else
             {
                 MessageBox.Show("Удалять можно свои сообщения.",
-                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                    LocalizationSource.Get("Info"), MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
     }
@@ -1991,15 +2000,15 @@ public partial class MainWindow : Window
         {
             if (_currentChannel == null)
             {
-                MessageBox.Show("Выберите канал", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(LocalizationSource.Get("SelectChannel"), LocalizationSource.Get("Info"), MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
             string channelText = MessageTextBox.Text.Trim();
             if (string.IsNullOrEmpty(channelText)) return;
             if (channelText.Length > 4000)
             {
-                MessageBox.Show("Сообщение слишком длинное: максимум 4000 символов.",
-                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(LocalizationSource.Get("MessageTooLong"),
+                    LocalizationSource.Get("Info"), MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
             await SendChannelMessageTextAsync(_currentChannel.Id, channelText);
@@ -2007,14 +2016,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_currentContactId <= 0) { MessageBox.Show("Выберите получателя", "Информация", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        if (_currentContactId <= 0) { MessageBox.Show(LocalizationSource.Get("SelectRecipient"), LocalizationSource.Get("Info"), MessageBoxButton.OK, MessageBoxImage.Information); return; }
         // NFC-нормализация до шифрования (требование 1.4.2)
         string text = TextNormalizer.NormalizeToNfc(MessageTextBox.Text.Trim());
         if (string.IsNullOrEmpty(text)) return;
         if (text.Length > 4000)
         {
-            MessageBox.Show("Сообщение слишком длинное: максимум 4000 символов.",
-                "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(LocalizationSource.Get("MessageTooLong"),
+                LocalizationSource.Get("Info"), MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -2088,7 +2097,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_currentContactId <= 0) { MessageBox.Show("Выберите получателя", "Информация", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+        if (_currentContactId <= 0) { MessageBox.Show(LocalizationSource.Get("SelectRecipient"), LocalizationSource.Get("Info"), MessageBoxButton.OK, MessageBoxImage.Information); return; }
         try
         {
             string? pubKey = await EnsurePublicKeyAsync(_currentContactId);

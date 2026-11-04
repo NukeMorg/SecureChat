@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata" id="root">
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <data name="MenuFile" xml:space="preserve"><value>Файл</value></data>
+  <data name="MenuView" xml:space="preserve"><value>Вид</value></data>
+  <data name="MenuProfile" xml:space="preserve"><value>Профиль</value></data>
+  <data name="MenuAdmin" xml:space="preserve"><value>Администрирование</value></data>
+  <data name="MenuChannels" xml:space="preserve"><value>Каналы</value></data>
+  <data name="MenuExport" xml:space="preserve"><value>Экспорт</value></data>
+  <data name="MenuHelp" xml:space="preserve"><value>Справка</value></data>
+  <data name="MiSwitchAccount" xml:space="preserve"><value>Сменить учетную запись</value></data>
+  <data name="MiExit" xml:space="preserve"><value>Выход</value></data>
+  <data name="MiSearch" xml:space="preserve"><value>Поиск по сообщениям...</value></data>
+  <data name="MiToggleTheme" xml:space="preserve"><value>Сменить тему</value></data>
+  <data name="MiSettings" xml:space="preserve"><value>Настройки...</value></data>
+  <data name="MiChangeName" xml:space="preserve"><value>Изменить имя...</value></data>
+  <data name="MiChangePassword" xml:space="preserve"><value>Сменить пароль...</value></data>
+  <data name="MiChangeStatus" xml:space="preserve"><value>Изменить статус...</value></data>
+  <data name="MiUploadAvatar" xml:space="preserve"><value>Загрузить аватар...</value></data>
+  <data name="MiMyProfile" xml:space="preserve"><value>Мой профиль...</value></data>
+  <data name="MiSelectedProfile" xml:space="preserve"><value>Профиль выбранного пользователя...</value></data>
+  <data name="MiShowPublicKey" xml:space="preserve"><value>Показать мой публичный ключ</value></data>
+  <data name="MiPrint" xml:space="preserve"><value>Печать чата...</value></data>
+  <data name="MiBan" xml:space="preserve"><value>Заблокировать выбранного...</value></data>
+  <data name="MiUnban" xml:space="preserve"><value>Разблокировать выбранного...</value></data>
+  <data name="MiChangeRole" xml:space="preserve"><value>Сменить роль выбранного...</value></data>
+  <data name="MiAuditLog" xml:space="preserve"><value>Журнал аудита...</value></data>
+  <data name="MiCreateChannel" xml:space="preserve"><value>Создать канал...</value></data>
+  <data name="MiAddMember" xml:space="preserve"><value>Добавить участника...</value></data>
+  <data name="MiRemoveMember" xml:space="preserve"><value>Удалить участника...</value></data>
+  <data name="MiRefreshChannels" xml:space="preserve"><value>Обновить список</value></data>
+  <data name="MiExcel" xml:space="preserve"><value>Текущий чат в Excel...</value></data>
+  <data name="MiWord" xml:space="preserve"><value>Текущий чат в Word...</value></data>
+  <data name="MiAbout" xml:space="preserve"><value>О программе</value></data>
+  <data name="MiUserGuide" xml:space="preserve"><value>Руководство пользователя</value></data>
+  <data name="SearchContactHint" xml:space="preserve"><value>Поиск по имени или ID + Enter...</value></data>
+  <data name="SendTooltip" xml:space="preserve"><value>Отправить (Ctrl+Enter)</value></data>
+  <data name="SelectRecipient" xml:space="preserve"><value>Выберите получателя</value></data>
+  <data name="SelectChannel" xml:space="preserve"><value>Выберите канал</value></data>
+  <data name="SelectChatUser" xml:space="preserve"><value>Выберите пользователя в списке контактов.</value></data>
+  <data name="NoGroupKey" xml:space="preserve"><value>Ключ канала ещё не получен — дождитесь доставки от владельца.</value></data>
+  <data name="MessageTooLong" xml:space="preserve"><value>Сообщение слишком длинное: максимум 4000 символов.</value></data>
+  <data name="Error" xml:space="preserve"><value>Ошибка</value></data>
+  <data name="Info" xml:space="preserve"><value>Информация</value></data>
+  <data name="Export" xml:space="preserve"><value>Экспорт</value></data>
+  <data name="Done" xml:space="preserve"><value>Готово</value></data>
+</root>
