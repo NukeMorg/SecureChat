@@ -384,18 +384,24 @@ public partial class MainWindow : Window
             return;
         }
 
-        string? role = ShowInputDialog("Роль: Admin / HR / Employee", "Employee");
+        string? role = ShowInputDialog("Роль: Admin / Менеджер / Employee", "Employee");
         if (string.IsNullOrWhiteSpace(role)) return;
-        if (role is not ("Admin" or "HR" or "Employee"))
+        // «Менеджер» — отображаемое имя роли HR (внутренний код протокола — HR)
+        string normalized = role switch
         {
-            MessageBox.Show("Недопустимая роль. Доступны: Admin, HR, Employee.",
+            "Менеджер" or "Manager" => "HR",
+            _ => role
+        };
+        if (normalized is not ("Admin" or "HR" or "Employee"))
+        {
+            MessageBox.Show("Недопустимая роль. Доступны: Admin, Менеджер, Employee.",
                 "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
 
-        var resp = await _network.ChangeRoleAsync(new ChangeRolePayload { TargetId = contact.Id, Role = role });
+        var resp = await _network.ChangeRoleAsync(new ChangeRolePayload { TargetId = contact.Id, Role = normalized });
         if (resp?.Status == "Ok")
-            MessageBox.Show($"Роль {contact.Name} (ID: {contact.Id}) изменена на {role}.",
+            MessageBox.Show($"Роль {contact.Name} (ID: {contact.Id}) изменена на {DisplayRole(normalized)}.",
                 "Администрирование", MessageBoxButton.OK, MessageBoxImage.Information);
         else
             MessageBox.Show($"Не удалось сменить роль: {MapAdminError(resp?.Status)}",
@@ -407,6 +413,9 @@ public partial class MainWindow : Window
         var window = new AuditLogWindow(_network) { Owner = this };
         window.Show();
     }
+
+    /// <summary>Отображаемое имя роли: HR → «Менеджер» (внутренний код — HR).</summary>
+    private static string DisplayRole(string role) => RoleDisplay.Display(role);
 
     /// <summary>Нейтральные тексты результатов админ-операций.</summary>
     private static string MapAdminError(string? status) => status switch
