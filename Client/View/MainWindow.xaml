@@ -103,6 +103,7 @@
         <Menu Grid.Row="0" FontSize="13" Background="{DynamicResource SidebarBackground}" Foreground="{DynamicResource ForegroundColor}">
             <!-- Файл -->
             <MenuItem Header="Файл">
+                <MenuItem Header="Печать чата..." Click="PrintChat_Click"/>
                 <MenuItem Header="Сменить учетную запись" Click="SwitchAccount_Click"/>
                 <MenuItem Header="Выход" Command="{x:Static local:MainWindow.ExitCommand}" InputGestureText="Ctrl+Q"/>
             </MenuItem>

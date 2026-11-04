@@ -10,9 +10,11 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using SecureChat.Client.Models;
+using SecureChat.Client.Print;
 using SecureChat.Client.Services;
 using SecureChat.Client.View;
 using SecureChat.Core;
@@ -1459,6 +1461,95 @@ public partial class MainWindow : Window
             Log.Error(ex, "Word export failed");
             MessageBox.Show($"Ошибка экспорта: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    // ---------- Печать чата (Лаба 4, только клиент) ----------
+
+    /// <summary>Строки-вложения текущего чата (имя файла, без содержимого).</summary>
+    private List<ChatExportRow>? CollectCurrentChatFileRows()
+    {
+        if (_currentChannel != null)
+        {
+            if (!_allChannelMessages.TryGetValue(_currentChannel.Id, out var channelCol)) return null;
+            return channelCol
+                .Where(m => m.ContentType == "File")
+                .Select(m => new ChatExportRow
+                {
+                    Id = m.Id,
+                    Sender = m.IsOutgoing ? _userName : GetChannelMemberName(_currentChannel.Id, m.SenderId),
+                    Text = "📎 " + Path.GetFileName(m.FilePath ?? "файл"),
+                    TimestampUtc = m.Timestamp.ToUniversalTime()
+                })
+                .ToList();
+        }
+
+        if (_currentContactId <= 0 || !_allDialogs.TryGetValue(_currentContactId, out var dialog)) return null;
+        var contact = _contacts.FirstOrDefault(c => c.Id == _currentContactId);
+        string contactName = contact?.RawName ?? $"User {_currentContactId}";
+        return dialog
+            .Where(m => m.ContentType == "File")
+            .Select(m => new ChatExportRow
+            {
+                Id = m.Id,
+                Sender = m.IsOutgoing ? _userName : contactName,
+                Text = "📎 " + Path.GetFileName(m.FilePath ?? "файл"),
+                TimestampUtc = m.Timestamp.ToUniversalTime()
+            })
+            .ToList();
+    }
+
+    private void PrintChat_Click(object sender, RoutedEventArgs e)
+    {
+        var textRows = CollectCurrentChatRows();
+        if (textRows == null)
+        {
+            MessageBox.Show("Выберите чат для печати.", "Печать",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var fileRows = CollectCurrentChatFileRows();
+
+        string chatTitle = _currentChannel != null
+            ? "# " + _currentChannel.Name
+            : (_contacts.FirstOrDefault(c => c.Id == _currentContactId)?.RawName ?? $"User {_currentContactId}");
+
+        var options = new PrintOptionsWindow { Owner = this };
+        if (options.ShowDialog() != true) return;
+
+        var rows = PrintOptionsWindow.CollectRows(textRows, fileRows, options.IncludeFiles);
+        if (rows.Count == 0)
+        {
+            MessageBox.Show("В чате нет сообщений для печати.", "Печать",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        string? watermark = options.UseWatermark
+            ? $"Конфиденциально · {_userName} · {DateTime.Now.ToString("g", CultureInfo.CurrentCulture)}"
+            : null;
+
+        var service = new PrintService(_userName);
+        var doc = service.BuildDocument(chatTitle, rows, watermark);
+
+        if (options.StartPreview)
+        {
+            new PrintPreviewWindow(doc, chatTitle) { Owner = this }.Show();
+            Log.Information("Chat print preview opened {Chat} rows={Rows}", chatTitle, rows.Count);
+            return;
+        }
+
+        var printDialog = new PrintDialog();
+        if (printDialog.ShowDialog() != true) return;
+
+        doc.PageWidth = printDialog.PrintableAreaWidth;
+        doc.PageHeight = printDialog.PrintableAreaHeight;
+        var paginator = new PageNumberPaginator(((IDocumentPaginatorSource)doc).DocumentPaginator)
+        {
+            PageSize = new Size(printDialog.PrintableAreaWidth, printDialog.PrintableAreaHeight)
+        };
+        printDialog.PrintDocument(paginator, $"SecureChat — {chatTitle}");
+        Log.Information("Chat printed {Chat} pages={Pages} rows={Rows}",
+            chatTitle, paginator.PageCount, rows.Count);
     }
 
     private static string MapChannelError(string? status) => status switch
