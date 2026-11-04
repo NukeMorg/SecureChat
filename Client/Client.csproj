@@ -3,18 +3,10 @@
 		<OutputType>WinExe</OutputType>
 		<TargetFramework>net9.0-windows</TargetFramework>
 		<UseWPF>true</UseWPF>
-		<UseWindowsForms>true</UseWindowsForms>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<RootNamespace>SecureChat.Client</RootNamespace>
 	</PropertyGroup>
-
-	<!-- WinForms-типы не в глобальном неймспейсе: явные using только в WinFormsPrintService -->
-	<ItemGroup>
-		<Using Remove="System.Windows.Forms" />
-		<Using Remove="System.Drawing" />
-		<Using Remove="System.Drawing.Printing" />
-	</ItemGroup>
 
 	<ItemGroup>
 		<None Remove="Images\add_contact.png" />

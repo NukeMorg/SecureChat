@@ -1571,19 +1571,6 @@ public partial class MainWindow : Window
         var printDialog = new PrintDialog();
         if (printDialog.ShowDialog() != true) return;
 
-        // движок PrintDocument (WinForms): программный вывод каждой страницы
-        if (options.UseWinForms)
-        {
-            var engine = new WinFormsPrintService(_userName, chatTitle, rows, options.UseWatermark);
-            var printDoc = engine.CreateDocument();
-            if (printDialog.PrintQueue != null)
-                printDoc.PrinterSettings.PrinterName = printDialog.PrintQueue.FullName;
-            printDoc.Print();
-            Log.Information("Chat printed via PrintDocument {Chat} pages={Pages} rows={Rows}",
-                chatTitle, engine.TotalPages, rows.Count);
-            return;
-        }
-
         doc.PageWidth = printDialog.PrintableAreaWidth;
         doc.PageHeight = printDialog.PrintableAreaHeight;
         var paginator = new PageNumberPaginator(((IDocumentPaginatorSource)doc).DocumentPaginator)
