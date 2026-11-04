@@ -1,10 +1,11 @@
 ﻿using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace SecureChat.Common;
+namespace SecureChat.Core;
 
 /// <summary>
 /// Базовый конверт сообщения: тип + произвольный payload (JSON).
+/// Используется только в legacy-режиме сырого WebSocket и удаляется после миграции на SignalR.
 /// </summary>
 public class BaseMessage
 {

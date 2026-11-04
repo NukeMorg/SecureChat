@@ -37,7 +37,7 @@ public class EmailService
         if (!_useRealSmtp || string.IsNullOrWhiteSpace(_senderEmail) || string.IsNullOrWhiteSpace(_senderPassword))
         {
             Log.Warning("[DEV MODE] Код подтверждения для {MaskedEmail}: {Code}. SMTP отключён.",
-                Server.MaskEmail(toEmail), code);
+                PiiMasking.Email(toEmail), code);
             return true;
         }
 
@@ -60,13 +60,13 @@ public class EmailService
             mail.To.Add(toEmail);
 
             await client.SendMailAsync(mail);
-            Log.Information("Письмо с кодом отправлено на {MaskedEmail}", Server.MaskEmail(toEmail));
+            Log.Information("Письмо с кодом отправлено на {MaskedEmail}", PiiMasking.Email(toEmail));
             return true;
         }
         catch (Exception ex)
         {
             // НЕ логируем код в тексте ошибки — ex.Message может содержать тело письма
-            Log.Error(ex, "Ошибка отправки письма на {MaskedEmail}", Server.MaskEmail(toEmail));
+            Log.Error(ex, "Ошибка отправки письма на {MaskedEmail}", PiiMasking.Email(toEmail));
             return false;
         }
     }

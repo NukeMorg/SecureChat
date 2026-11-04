@@ -10,7 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using SecureChat.Client.Services;
-using SecureChat.Common;
+using SecureChat.Core;
 using Serilog;
 
 namespace SecureChat.Client.View;
