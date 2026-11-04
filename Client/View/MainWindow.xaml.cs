@@ -581,7 +581,8 @@ public partial class MainWindow : Window
     private async void SendButton_Click(object sender, RoutedEventArgs e)
     {
         if (_currentContactId <= 0) { MessageBox.Show("Выберите получателя", "Информация", MessageBoxButton.OK, MessageBoxImage.Information); return; }
-        string text = MessageTextBox.Text.Trim();
+        // NFC-нормализация до шифрования (требование 1.4.2)
+        string text = TextNormalizer.NormalizeToNfc(MessageTextBox.Text.Trim());
         if (string.IsNullOrEmpty(text)) return;
         if (text.Length > 4000)
         {
