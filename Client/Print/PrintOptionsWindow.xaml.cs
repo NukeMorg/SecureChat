@@ -11,6 +11,7 @@ public partial class PrintOptionsWindow : Window
     public bool IncludeFiles => IncludeFilesCheck.IsChecked == true;
     public bool UseWatermark => WatermarkCheck.IsChecked == true;
     public bool StartPreview { get; private set; }
+    public bool SaveXps { get; private set; }
 
     public PrintOptionsWindow()
     {
@@ -20,12 +21,21 @@ public partial class PrintOptionsWindow : Window
     private void Print_Click(object sender, RoutedEventArgs e)
     {
         StartPreview = false;
+        SaveXps = false;
         DialogResult = true;
     }
 
     private void Preview_Click(object sender, RoutedEventArgs e)
     {
         StartPreview = true;
+        SaveXps = false;
+        DialogResult = true;
+    }
+
+    private void SaveXps_Click(object sender, RoutedEventArgs e)
+    {
+        StartPreview = false;
+        SaveXps = true;
         DialogResult = true;
     }
 

@@ -1538,6 +1538,32 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (options.SaveXps)
+        {
+            var xpsDlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Сохранить как XPS (PDF-альтернатива)",
+                Filter = "Документ XPS (*.xps)|*.xps",
+                FileName = PathSanitizer.SanitizeFileName($"chat-{DateTime.Now:yyyyMMdd-HHmm}", "chat") + ".xps"
+            };
+            if (xpsDlg.ShowDialog() != true) return;
+
+            doc.PageWidth = 793.7;  // A4 96dpi
+            doc.PageHeight = 1122.5;
+            var xpsPaginator = new PageNumberPaginator(((IDocumentPaginatorSource)doc).DocumentPaginator)
+            {
+                PageSize = new Size(doc.PageWidth.Value, doc.PageHeight.Value)
+            };
+            using var xps = new System.Windows.Xps.Packaging.XpsDocument(
+                xpsDlg.FileName, FileAccess.ReadWrite);
+            var writer = System.Windows.Xps.Packaging.XpsDocument.CreateXpsDocumentWriter(xps);
+            writer.Write(xpsPaginator);
+            Log.Information("Chat saved to XPS {File} rows={Rows}", xpsDlg.FileName, rows.Count);
+            MessageBox.Show($"Сохранено: {xpsDlg.FileName}", "Экспорт",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
         var printDialog = new PrintDialog();
         if (printDialog.ShowDialog() != true) return;
 
