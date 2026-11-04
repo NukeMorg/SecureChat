@@ -70,6 +70,8 @@
                 <MenuItem Header="Заблокировать выбранного..." Click="BanSelectedUser_Click"/>
                 <MenuItem Header="Разблокировать выбранного..." Click="UnbanSelectedUser_Click"/>
                 <MenuItem Header="Сменить роль выбранного..." Click="ChangeRoleSelectedUser_Click"/>
+                <Separator/>
+                <MenuItem Header="Журнал аудита..." Click="AuditLog_Click"/>
             </MenuItem>
 
             <!-- Справка -->

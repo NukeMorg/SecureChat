@@ -392,3 +392,21 @@ public class UserProfileDto
     [JsonPropertyName("IsOnline")] public bool IsOnline { get; set; }
     [JsonPropertyName("AvatarBase64")] public string? AvatarBase64 { get; set; }
 }
+
+/// <summary>
+/// Запрос журнала аудита (только Admin): постранично, свежие сверху.
+/// </summary>
+public class GetAuditLogPayload
+{
+    [JsonPropertyName("Limit")] public int Limit { get; set; } = 200;
+    [JsonPropertyName("Offset")] public int Offset { get; set; } = 0;
+}
+
+/// <summary>
+/// Ответ с журналом аудита.
+/// </summary>
+public class AuditLogResponsePayload
+{
+    [JsonPropertyName("TotalCount")] public long TotalCount { get; set; }
+    [JsonPropertyName("Entries")] public List<AuditLogEntry> Entries { get; set; } = new();
+}

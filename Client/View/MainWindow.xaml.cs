@@ -386,6 +386,12 @@ public partial class MainWindow : Window
                 "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
+    private void AuditLog_Click(object sender, RoutedEventArgs e)
+    {
+        var window = new AuditLogWindow(_network) { Owner = this };
+        window.Show();
+    }
+
     /// <summary>Нейтральные тексты результатов админ-операций.</summary>
     private static string MapAdminError(string? status) => status switch
     {

@@ -412,6 +412,22 @@ public class ChatHub : Hub
         });
     }
 
+    // ---------- Аудит (просмотр только Admin, требование 1.1.3) ----------
+
+    public Task<AuditLogResponsePayload?> GetAuditLog(GetAuditLogPayload? p)
+    {
+        if (!IsAdmin()) return Task.FromResult<AuditLogResponsePayload?>(null);
+
+        int limit = p is { Limit: > 0 and <= 500 } ? p.Limit : 200;
+        int offset = p is { Offset: > 0 } ? p.Offset : 0;
+
+        return Task.FromResult<AuditLogResponsePayload?>(new AuditLogResponsePayload
+        {
+            TotalCount = _db.GetAuditLogCount(),
+            Entries = _db.GetAuditLog(limit, offset)
+        });
+    }
+
     // ---------- Direct-чаты ----------
 
     public async Task SendMessage(SendMessagePayload? p)

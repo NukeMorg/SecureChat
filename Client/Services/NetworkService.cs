@@ -156,6 +156,9 @@ public class NetworkService
     public Task<UserProfileDto?> GetUserProfileAsync(GetUserProfilePayload payload) =>
         InvokeWithResultAsync<UserProfileDto>("GetUserProfile", payload);
 
+    public Task<AuditLogResponsePayload?> GetAuditLogAsync(GetAuditLogPayload payload) =>
+        InvokeWithResultAsync<AuditLogResponsePayload>("GetAuditLog", payload);
+
     /// <summary>Вызов хаб-метода с ответом-статусом (Admin-операции, смена пароля).</summary>
     private Task<SimpleStatusPayload?> InvokeWithResultAsync(string methodName, object payload) =>
         InvokeWithResultAsync<SimpleStatusPayload>(methodName, payload);
