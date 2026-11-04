@@ -159,8 +159,8 @@ public partial class LoginWindow : Window
 
     private static string? ValidateEmail(string email)
     {
-        if (string.IsNullOrWhiteSpace(email)) return "Введите email. Пример: example@company.com";
-        if (!IsValidEmail(email)) return "Допустима только корпоративная почта. Пример: example@company.com";
+        if (string.IsNullOrWhiteSpace(email)) return "Введите email. Пример: example@gmail.com";
+        if (!IsValidEmail(email)) return "Неверный формат почты. Пример: example@gmail.com";
         return null;
     }
 
@@ -458,7 +458,7 @@ public partial class LoginWindow : Window
                     "InvalidCode" => "Неверный код подтверждения.",
                     "CodeExpired" => "Срок действия кода истёк. Запросите новый.",
                     "UserExists" => "Пользователь с такой почтой уже существует.",
-                    "InvalidEmail" => "Допустима только корпоративная почта @company.com.",
+                    "InvalidEmail" => "Неверный формат почты. Пример: example@gmail.com",
                     "WeakPassword" => "Пароль: минимум 8 символов, хотя бы одна буква и одна цифра.",
                     "InvalidUserName" => "Некорректное имя пользователя.",
                     _ => $"Ошибка регистрации: {resp.Status}"

@@ -9,8 +9,8 @@ namespace SecureChat.Core;
 /// </summary>
 public static partial class Validators
 {
-    /// <summary>Корпоративная почта: локальная часть + домен company.com.</summary>
-    [GeneratedRegex(@"^[A-Za-z0-9._%+-]+@company\.com$", RegexOptions.NonBacktracking)]
+    /// <summary>Электронная почта: любая доменная зона, строгая проверка формата.</summary>
+    [GeneratedRegex(@"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", RegexOptions.NonBacktracking)]
     private static partial Regex EmailRegex();
 
     private const int MaxEmailLength = 254;
