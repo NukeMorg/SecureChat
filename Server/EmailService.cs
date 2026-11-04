@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Serilog;
+using ILogger = Serilog.ILogger;
 
 namespace SecureChat.Server;
 
