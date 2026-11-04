@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.SignalR;
 using SecureChat.Core;
+using SecureChat.Security;
 using Serilog;
 using ILogger = Serilog.ILogger;
 using Serilog.Context;
@@ -57,7 +58,7 @@ public class ChatHub : Hub
 
         if (!_db.TryReserveEmailSend(p.Email, TimeSpan.FromMinutes(15), maxAttempts: 3))
         {
-            _log.Warning("Email code rate limit for {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Warning("Email code rate limit for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("SendEmailCodeResponse",
                 new SendEmailCodeResponsePayload { Status = "RateLimit", Message = "Слишком много запросов. Попробуйте через 15 минут." });
             return;
@@ -69,13 +70,13 @@ public class ChatHub : Hub
         bool sent = await _email.SendVerificationCodeAsync(p.Email, code);
         if (sent)
         {
-            _log.Information("Verification code sent to {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Information("Verification code sent to {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("SendEmailCodeResponse",
                 new SendEmailCodeResponsePayload { Status = "Ok", Message = "Код подтверждения отправлен на почту." });
         }
         else
         {
-            _log.Error("Failed to send email to {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Error("Failed to send email to {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("SendEmailCodeResponse",
                 new SendEmailCodeResponsePayload { Status = "SendFailed", Message = "Не удалось отправить письмо." });
         }
@@ -90,12 +91,12 @@ public class ChatHub : Hub
             return;
         }
 
-        _log.Information("Login attempt for {MaskedEmail}", PiiMasking.Email(p.Email));
+        _log.Information("Login attempt for {MaskedEmail}", PiiMasker.Email(p.Email));
 
         string ip = Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         if (_db.IsLoginBlocked(p.Email, ip, TimeSpan.FromMinutes(15), maxAttempts: 5))
         {
-            _log.Warning("Login rate limit exceeded for {MaskedEmail} ip={Ip}", PiiMasking.Email(p.Email), ip);
+            _log.Warning("Login rate limit exceeded for {MaskedEmail} ip={Ip}", PiiMasker.Email(p.Email), ip);
             await Respond("LoginResponse", new LoginResponsePayload { Status = "RateLimited" });
             return;
         }
@@ -105,7 +106,7 @@ public class ChatHub : Hub
         {
             _db.RecordFailedLogin(p.Email, ip);
             WriteAudit(null, "FailedLogin", null, "InvalidCredentials");
-            _log.Warning("Invalid credentials for {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Warning("Invalid credentials for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("LoginResponse", new LoginResponsePayload { Status = "InvalidCredentials" });
             return;
         }
@@ -156,18 +157,18 @@ public class ChatHub : Hub
             return;
         }
 
-        _log.Information("Registration request for {MaskedEmail}", PiiMasking.Email(p.Email));
+        _log.Information("Registration request for {MaskedEmail}", PiiMasker.Email(p.Email));
 
         var verifyResult = _db.VerifyAndConsumeCode(p.Email, p.Code);
         if (verifyResult == Database.CodeVerifyResult.Invalid)
         {
-            _log.Warning("Invalid verification code for {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Warning("Invalid verification code for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "InvalidCode" });
             return;
         }
         if (verifyResult == Database.CodeVerifyResult.Expired)
         {
-            _log.Warning("Verification code expired for {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Warning("Verification code expired for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "CodeExpired" });
             return;
         }
@@ -175,7 +176,7 @@ public class ChatHub : Hub
         var reg = _db.RegisterUser(p.Email, p.Password, p.UserName, p.PublicKey);
         if (reg == null)
         {
-            _log.Warning("User already exists: {MaskedEmail}", PiiMasking.Email(p.Email));
+            _log.Warning("User already exists: {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "UserExists" });
             return;
         }
