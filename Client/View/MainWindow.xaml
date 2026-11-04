@@ -148,7 +148,8 @@
                     <!-- Список каналов (режим «Каналы») -->
                     <ListBox x:Name="ChannelsListBox" Grid.Row="3" Visibility="Collapsed"
                              Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
-                             BorderThickness="0">
+                             BorderThickness="0"
+                             SelectionChanged="ChannelsListBox_SelectionChanged">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Border Background="{DynamicResource ContactItemBackground}" CornerRadius="6" Margin="2" Padding="8">
@@ -236,6 +237,9 @@
                                             </Style>
                                         </Border.Style>
                                         <StackPanel>
+                                            <TextBlock Text="{Binding SenderName}" FontWeight="SemiBold" FontSize="11"
+                                                       Foreground="{DynamicResource StatusForeground}"
+                                                       Visibility="{Binding HasSenderName, Converter={StaticResource BoolToVisibilityConverter}}"/>
                                             <TextBlock Text="{Binding Text}" Visibility="{Binding TextVisibility}"
                                                        Foreground="{DynamicResource MessageTextForeground}" FontSize="13" TextWrapping="Wrap"/>
                                             <StackPanel Orientation="Horizontal" Visibility="{Binding FileVisibility}">

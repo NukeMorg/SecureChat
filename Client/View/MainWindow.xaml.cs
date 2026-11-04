@@ -37,6 +37,9 @@ public partial class MainWindow : Window
 
     private readonly ObservableCollection<ChannelItem> _channels = new();
     private readonly ChannelCrypto _channelCrypto = new();
+    private readonly Dictionary<string, ObservableCollection<DialogMessage>> _allChannelMessages = new();
+    private readonly Dictionary<string, Dictionary<int, string>> _channelMemberNames = new();
+    private readonly HashSet<string> _loadedChannelIds = new();
     private ChannelItem? _currentChannel;
 
     private NetworkService _network;
@@ -100,6 +103,7 @@ public partial class MainWindow : Window
         _network.OnChannelKeyRotated += p => Dispatcher.Invoke(() => { /* состояние сбросится при доставке нового ключа */ });
         _network.OnChannelMemberAdded += p => Dispatcher.Invoke(() => _ = RefreshChannelsAsync());
         _network.OnChannelMemberRemoved += p => Dispatcher.Invoke(() => _ = RefreshChannelsAsync());
+        _network.OnIncomingChannelMessage += OnIncomingChannelMessage;
         _network.OnUserProfileUpdated += OnUserProfileUpdated;
         _network.OnUserInfoResponse += OnUserInfoResponse;
         _network.OnHistoryResponse += OnHistoryResponse;
@@ -678,6 +682,177 @@ public partial class MainWindow : Window
         });
     }
 
+    // ---------- Каналы: переписка и история ----------
+
+    private async void ChannelsListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ChannelsListBox.SelectedItem is not ChannelItem channel) return;
+        _currentChannel = channel;
+        _currentContactId = -1;
+
+        if (!_allChannelMessages.ContainsKey(channel.Id))
+            _allChannelMessages[channel.Id] = new ObservableCollection<DialogMessage>();
+        MessagesListBox.ItemsSource = _allChannelMessages[channel.Id];
+
+        await CacheChannelMemberNamesAsync(channel.Id);
+        await EnsureChannelHistoryAsync(channel.Id);
+    }
+
+    private async Task CacheChannelMemberNamesAsync(string channelId)
+    {
+        if (_channelMemberNames.ContainsKey(channelId)) return;
+        var resp = await _network.GetChannelMembersAsync(new JoinChannelPayload { ChannelId = channelId });
+        if (resp == null) return;
+        _channelMemberNames[channelId] = resp.Members.ToDictionary(m => m.UserId, m => m.UserName);
+    }
+
+    private string GetChannelMemberName(string channelId, int userId) =>
+        _channelMemberNames.TryGetValue(channelId, out var names) && names.TryGetValue(userId, out var name)
+            ? name
+            : $"User {userId}";
+
+    private async Task EnsureChannelHistoryAsync(string channelId)
+    {
+        if (_loadedChannelIds.Contains(channelId)) return;
+        _loadedChannelIds.Add(channelId);
+
+        var resp = await _network.GetChannelHistoryAsync(new GetChannelHistoryPayload
+        { ChannelId = channelId, Limit = 50 });
+        if (resp == null) return;
+
+        var messages = resp.Messages;
+        messages.Reverse(); // сервер отдаёт по убыванию времени; расшифровка — по возрастанию
+
+        foreach (var m in messages)
+        {
+            if (m.ContentType != "Text" || string.IsNullOrEmpty(m.Ciphertext)) continue;
+            byte[]? key = _channelCrypto.DeriveMessageKeyAt(channelId, m.SenderId, m.ChainIteration);
+            if (key == null)
+            {
+                Log.Warning("History skipped: no GroupKey channelId={ChannelId} messageId={MessageId}", channelId, m.MessageId);
+                continue;
+            }
+            try
+            {
+                byte[] plain = _crypto.AesGcmDecrypt(key,
+                    Convert.FromBase64String(m.Nonce ?? ""),
+                    Convert.FromBase64String(m.Ciphertext),
+                    Convert.FromBase64String(m.Tag ?? ""));
+
+                AddChannelMessage(channelId, new DialogMessage
+                {
+                    Id = m.MessageId,
+                    SenderId = m.SenderId,
+                    Text = Encoding.UTF8.GetString(plain),
+                    ContentType = "Text",
+                    Status = "",
+                    IsOutgoing = m.SenderId == _clientId,
+                    SenderName = m.SenderId == _clientId ? "" : GetChannelMemberName(channelId, m.SenderId),
+                    Timestamp = DateTime.Parse(m.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "History decrypt failed channelId={ChannelId} messageId={MessageId}", channelId, m.MessageId);
+            }
+        }
+    }
+
+    private void AddChannelMessage(string channelId, DialogMessage msg)
+    {
+        if (!_allChannelMessages.ContainsKey(channelId))
+            _allChannelMessages[channelId] = new ObservableCollection<DialogMessage>();
+        if (_allChannelMessages[channelId].Any(m => m.Id == msg.Id)) return;
+        _allChannelMessages[channelId].Add(msg);
+        if (_currentChannel?.Id == channelId)
+            MessagesListBox.ItemsSource = _allChannelMessages[channelId];
+    }
+
+    private void OnIncomingChannelMessage(IncomingChannelMessagePayload msg)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            byte[]? key = _channelCrypto.GetMessageKey(msg.ChannelId, msg.SenderId, msg.ChainIteration);
+            if (key == null)
+            {
+                Log.Warning("Channel message dropped (no key or replay) channelId={ChannelId} senderId={SenderId} iteration={Iteration}",
+                    msg.ChannelId, msg.SenderId, msg.ChainIteration);
+                return;
+            }
+            if (msg.ContentType != "Text" || msg.EncryptedData == null) return;
+
+            try
+            {
+                byte[] plain = _crypto.AesGcmDecrypt(key,
+                    Convert.FromBase64String(msg.EncryptedData.Nonce),
+                    Convert.FromBase64String(msg.EncryptedData.Ciphertext),
+                    Convert.FromBase64String(msg.EncryptedData.Tag));
+
+                AddChannelMessage(msg.ChannelId, new DialogMessage
+                {
+                    Id = msg.MessageId,
+                    SenderId = msg.SenderId,
+                    Text = Encoding.UTF8.GetString(plain),
+                    ContentType = "Text",
+                    Status = "",
+                    IsOutgoing = msg.SenderId == _clientId,
+                    SenderName = msg.SenderId == _clientId ? "" : GetChannelMemberName(msg.ChannelId, msg.SenderId),
+                    Timestamp = DateTime.Parse(msg.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Channel message decrypt failed channelId={ChannelId} messageId={MessageId}",
+                    msg.ChannelId, msg.MessageId);
+            }
+        });
+    }
+
+    /// <summary>Отправка сообщения в канал: MessageKey из ratchet, AES-GCM, ChainIteration.</summary>
+    private async Task SendChannelMessageTextAsync(string channelId, string text)
+    {
+        var next = _channelCrypto.GetNextMessageKey(channelId, _clientId);
+        if (next == null)
+        {
+            MessageBox.Show("Ключ канала ещё не получен — дождитесь доставки от владельца.",
+                "Каналы", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var (messageKey, iteration) = next.Value;
+
+        byte[] plain = Encoding.UTF8.GetBytes(text);
+        var (ct, nonce, tag) = _crypto.AesGcmEncrypt(messageKey, plain);
+        string msgId = Guid.NewGuid().ToString();
+
+        AddChannelMessage(channelId, new DialogMessage
+        {
+            Id = msgId,
+            SenderId = _clientId,
+            Text = text,
+            ContentType = "Text",
+            Status = "",
+            IsOutgoing = true,
+            Timestamp = DateTime.Now
+        });
+
+        await _network.SendChannelMessageAsync(new SendChannelMessagePayload
+        {
+            ChannelId = channelId,
+            MessageId = msgId,
+            ChainIteration = iteration,
+            EncryptedData = new EncryptedData
+            {
+                Nonce = Convert.ToBase64String(nonce),
+                Ciphertext = Convert.ToBase64String(ct),
+                Tag = Convert.ToBase64String(tag)
+            },
+            ContentType = "Text"
+        });
+
+        Log.Information("Channel message sent channelId={ChannelId} length={Length} iteration={Iteration} messageId={MessageId}",
+            channelId, text.Length, iteration, msgId);
+    }
+
     private static string MapChannelError(string? status) => status switch
     {
         "Forbidden" => "Недостаточно прав (нужна роль HR или Admin).",
@@ -973,6 +1148,7 @@ public partial class MainWindow : Window
     {
         if (ContactsListBox.SelectedItem is ContactItem contact)
         {
+            _currentChannel = null;
             _currentContactId = contact.Id;
             if (!_allDialogs.ContainsKey(_currentContactId))
                 _allDialogs[_currentContactId] = new ObservableCollection<DialogMessage>();
@@ -985,6 +1161,27 @@ public partial class MainWindow : Window
 
     private async void SendButton_Click(object sender, RoutedEventArgs e)
     {
+        // режим «Каналы»: сообщение уходит в канал через групповой ключ
+        if (ListModeComboBox.SelectedIndex == 1)
+        {
+            if (_currentChannel == null)
+            {
+                MessageBox.Show("Выберите канал", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            string channelText = MessageTextBox.Text.Trim();
+            if (string.IsNullOrEmpty(channelText)) return;
+            if (channelText.Length > 4000)
+            {
+                MessageBox.Show("Сообщение слишком длинное: максимум 4000 символов.",
+                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            await SendChannelMessageTextAsync(_currentChannel.Id, channelText);
+            MessageTextBox.Clear();
+            return;
+        }
+
         if (_currentContactId <= 0) { MessageBox.Show("Выберите получателя", "Информация", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         // NFC-нормализация до шифрования (требование 1.4.2)
         string text = TextNormalizer.NormalizeToNfc(MessageTextBox.Text.Trim());
