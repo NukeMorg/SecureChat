@@ -1358,6 +1358,109 @@ public partial class MainWindow : Window
         ChatSearchCount.Text = $"{index + 1}/{_chatSearchMatches.Count}";
     }
 
+    // ---------- Экспорт текущего чата (Лаба 3, только клиент) ----------
+
+    /// <summary>Строки текущего чата для экспорта: расшифрованные текстовые сообщения.</summary>
+    private List<ChatExportRow>? CollectCurrentChatRows()
+    {
+        if (_currentChannel != null)
+        {
+            if (!_allChannelMessages.TryGetValue(_currentChannel.Id, out var channelCol)) return null;
+            return channelCol
+                .Where(m => m.ContentType == "Text" && m.Text != "Сообщение удалено")
+                .Select(m => new ChatExportRow
+                {
+                    Id = m.Id,
+                    Sender = m.IsOutgoing ? _userName : GetChannelMemberName(_currentChannel.Id, m.SenderId),
+                    Text = m.Text,
+                    TimestampUtc = m.Timestamp.ToUniversalTime()
+                })
+                .ToList();
+        }
+
+        if (_currentContactId <= 0 ||
+            !_allDialogs.TryGetValue(_currentContactId, out var dialog)) return null;
+
+        var contact = _contacts.FirstOrDefault(c => c.Id == _currentContactId);
+        string contactName = contact?.RawName ?? $"User {_currentContactId}";
+        return dialog
+            .Where(m => m.ContentType == "Text" && m.Text != "Сообщение удалено")
+            .Select(m => new ChatExportRow
+            {
+                Id = m.Id,
+                Sender = m.IsOutgoing ? _userName : contactName,
+                Text = m.Text,
+                TimestampUtc = m.Timestamp.ToUniversalTime()
+            })
+            .ToList();
+    }
+
+    private void ExportExcel_Click(object sender, RoutedEventArgs e)
+    {
+        var rows = CollectCurrentChatRows();
+        if (rows == null)
+        {
+            MessageBox.Show("Выберите чат для экспорта.", "Экспорт",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Экспорт в Excel",
+            Filter = "Книга Excel (*.xlsx)|*.xlsx",
+            FileName = PathSanitizer.SanitizeFileName($"chat-{DateTime.Now:yyyyMMdd-HHmm}", "chat") + ".xlsx"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            var stats = ChatAggregator.Aggregate(rows);
+            new ExcelStatsRenderer().Render(stats, dlg.FileName);
+            Log.Information("Chat exported to Excel {File} rows={Count}", dlg.FileName, stats.TotalMessages);
+            MessageBox.Show($"Экспорт выполнен: {stats.TotalMessages:N0} сообщений.\n{dlg.FileName}",
+                "Экспорт", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Excel export failed");
+            MessageBox.Show($"Ошибка экспорта: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ExportWord_Click(object sender, RoutedEventArgs e)
+    {
+        var rows = CollectCurrentChatRows();
+        if (rows == null)
+        {
+            MessageBox.Show("Выберите чат для экспорта.", "Экспорт",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Экспорт в Word",
+            Filter = "Документ Word (*.docx)|*.docx",
+            FileName = PathSanitizer.SanitizeFileName($"chat-{DateTime.Now:yyyyMMdd-HHmm}", "chat") + ".docx"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            var stats = ChatAggregator.Aggregate(rows);
+            new WordStatsRenderer().Render(stats, dlg.FileName);
+            Log.Information("Chat exported to Word {File} rows={Count}", dlg.FileName, stats.TotalMessages);
+            MessageBox.Show($"Экспорт выполнен: {stats.TotalMessages:N0} сообщений.\n{dlg.FileName}",
+                "Экспорт", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Word export failed");
+            MessageBox.Show($"Ошибка экспорта: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private static string MapChannelError(string? status) => status switch
     {
         "Forbidden" => "Недостаточно прав (нужна роль HR или Admin).",
