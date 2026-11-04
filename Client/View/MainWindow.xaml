@@ -59,6 +59,13 @@
                 <MenuItem Header="Показать мой публичный ключ" Click="ShowMyPublicKey_Click"/>
             </MenuItem>
 
+            <!-- Администрирование (видно только роли Admin) -->
+            <MenuItem Header="Администрирование" x:Name="AdminMenu" Visibility="Collapsed">
+                <MenuItem Header="Заблокировать выбранного..." Click="BanSelectedUser_Click"/>
+                <MenuItem Header="Разблокировать выбранного..." Click="UnbanSelectedUser_Click"/>
+                <MenuItem Header="Сменить роль выбранного..." Click="ChangeRoleSelectedUser_Click"/>
+            </MenuItem>
+
             <!-- Справка -->
             <MenuItem Header="Справка">
                 <MenuItem Header="О программе" Click="About_Click"/>

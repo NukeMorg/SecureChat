@@ -14,7 +14,7 @@ using Serilog;
 
 namespace SecureChat.Client.View;
 
-public record AutoLoginSession(int UserId, string UserName, string Token, string PublicKey, string PrivateKey);
+public record AutoLoginSession(int UserId, string UserName, string Token, string PublicKey, string PrivateKey, string Role);
 
 public partial class LoginWindow : Window
 {
@@ -24,6 +24,7 @@ public partial class LoginWindow : Window
 
     public int AuthenticatedUserId { get; private set; }
     public string AuthenticatedUserName { get; private set; } = "User";
+    public string AuthenticatedUserRole { get; private set; } = "Employee";
     public string Token { get; private set; } = "";
     public string ServerUrl => StaticServerUrl;
     public string PublicKeyPem { get; private set; } = "";
@@ -260,6 +261,7 @@ public partial class LoginWindow : Window
             {
                 AuthenticatedUserId = resp.UserId;
                 AuthenticatedUserName = resp.UserName;
+                AuthenticatedUserRole = string.IsNullOrEmpty(resp.Role) ? "Employee" : resp.Role;
                 Token = resp.Token;
 
                 if (string.IsNullOrEmpty(PublicKeyPem) || string.IsNullOrEmpty(PrivateKeyPem))
@@ -297,6 +299,7 @@ public partial class LoginWindow : Window
                 {
                     "InvalidCredentials" => "Неверная почта или пароль.",
                     "RateLimited" => "Слишком много попыток входа. Попробуйте через 15 минут.",
+                    "Banned" => "Аккаунт заблокирован администратором.",
                     _ => "Пользователь не найден."
                 });
                 SubmitButton.IsEnabled = true;
@@ -439,6 +442,7 @@ public partial class LoginWindow : Window
             {
                 AuthenticatedUserId = resp.AssignedId;
                 AuthenticatedUserName = _pendingName;
+                AuthenticatedUserRole = string.IsNullOrEmpty(resp.Role) ? "Employee" : resp.Role;
                 Token = resp.Token;
 
                 Log.Information("Registration successful userId={UserId}", resp.AssignedId);
@@ -625,7 +629,7 @@ public partial class LoginWindow : Window
             string? privateKey = SecretProtector.Unprotect(privRaw);
             if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(privateKey)) return null;
 
-            return new AutoLoginSession(id, name, token, pub, privateKey);
+            return new AutoLoginSession(id, name, token, pub, privateKey, "Employee");
         }
         catch (Exception ex)
         {
@@ -658,7 +662,8 @@ public partial class LoginWindow : Window
                         return new AutoLoginSession(
                             resp.UserId,
                             string.IsNullOrEmpty(resp.UserName) ? saved.UserName : resp.UserName,
-                            saved.Token, saved.PublicKey, saved.PrivateKey);
+                            saved.Token, saved.PublicKey, saved.PrivateKey,
+                            string.IsNullOrEmpty(resp.Role) ? "Employee" : resp.Role);
                     }
                     finally { network.OnHelloResponse -= handler; }
                 }

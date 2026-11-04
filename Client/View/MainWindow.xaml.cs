@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     private string _serverAddress;
     private string _publicKeyPem;
     private string _privateKeyPem;
+    private string _role;
 
     private int _currentContactId = -1;
     private Dictionary<int, string> _contactPublicKeys = new();
@@ -55,6 +56,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         _userName = "User";
         _token = "";
+        _role = "Employee";
         _serverAddress = LoginWindow.StaticServerUrl;
         _publicKeyPem = "";
         _privateKeyPem = "";
@@ -64,7 +66,7 @@ public partial class MainWindow : Window
         InitCommon();
     }
 
-    public MainWindow(int clientId, string userName, string token, string serverAddress, string publicKeyPem, string privateKeyPem, NetworkService network)
+    public MainWindow(int clientId, string userName, string token, string serverAddress, string publicKeyPem, string privateKeyPem, string role, NetworkService network)
     {
         InitializeComponent();
         _clientId = clientId;
@@ -73,6 +75,7 @@ public partial class MainWindow : Window
         _serverAddress = serverAddress;
         _publicKeyPem = publicKeyPem;
         _privateKeyPem = privateKeyPem;
+        _role = string.IsNullOrEmpty(role) ? "Employee" : role;
         _network = network;
         _dialogManager = new DialogManager(_crypto);
         _fileTransfer = new FileTransferManager(_crypto, _network);
@@ -88,6 +91,7 @@ public partial class MainWindow : Window
             Log.Error("Network error: {Error}", err);
             Dispatcher.Invoke(() => MessageBox.Show(MapErrorText(err), "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error));
         };
+        _network.OnBanned += reason => Dispatcher.Invoke(() => _ = OnBannedAsync(reason));
         _network.OnUserProfileUpdated += OnUserProfileUpdated;
         _network.OnUserInfoResponse += OnUserInfoResponse;
         _network.OnHistoryResponse += OnHistoryResponse;
@@ -234,12 +238,67 @@ public partial class MainWindow : Window
         Title = $"SecureChat Enterprise - {_userName} (ID: {_clientId})";
         UserIdTextBlock.Text = $"{_userName} (ID: {_clientId})";
         ConnectionIndicator.Fill = _network.IsConnected ? new SolidColorBrush(Colors.LimeGreen) : new SolidColorBrush(Colors.Gray);
+        AdminMenu.Visibility = _role == "Admin" ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void UpdateConnectionStatus(bool connected)
     {
         ConnectionIndicator.Fill = connected ? new SolidColorBrush(Colors.LimeGreen) : new SolidColorBrush(Colors.Gray);
         UserIdTextBlock.Text = connected ? $"{_userName} (ID: {_clientId})" : $"{_userName} (ID: {_clientId}) (отключено)";
+    }
+
+    // ---------- Блокировка (событие Banned от сервера) ----------
+
+    private async Task OnBannedAsync(string reason)
+    {
+        MessageBox.Show(
+            string.IsNullOrEmpty(reason)
+                ? "Ваш аккаунт заблокирован администратором."
+                : $"Ваш аккаунт заблокирован администратором.\nПричина: {reason}",
+            "Блокировка", MessageBoxButton.OK, MessageBoxImage.Warning);
+        await PerformAccountSwitchAsync();
+    }
+
+    private async void SwitchAccount_Click(object sender, RoutedEventArgs e)
+    {
+        await PerformAccountSwitchAsync();
+    }
+
+    private async Task PerformAccountSwitchAsync()
+    {
+        await _network.DisconnectAsync(logout: true);
+        LoginWindow.ClearAutoLoginState();
+        var app = (App)Application.Current;
+        app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        Hide();
+
+        try
+        {
+            var loginWindow = new LoginWindow();
+            bool? res = loginWindow.ShowDialog();
+            if (res == true && loginWindow.AuthenticatedUserId > 0)
+            {
+                var nextMain = new MainWindow(
+                    loginWindow.AuthenticatedUserId, loginWindow.AuthenticatedUserName,
+                    loginWindow.Token, loginWindow.ServerUrl,
+                    loginWindow.PublicKeyPem, loginWindow.PrivateKeyPem,
+                    loginWindow.AuthenticatedUserRole, loginWindow.Network);
+                Application.Current.MainWindow = nextMain;
+                nextMain.Show();
+                Close();
+                app.ShutdownMode = ShutdownMode.OnMainWindowClose;
+            }
+            else
+            {
+                app.Shutdown();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Account switch failed");
+            app.Shutdown();
+            throw;
+        }
     }
 
     private async void Reconnect_Click(object sender, RoutedEventArgs e)
@@ -259,41 +318,86 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void SwitchAccount_Click(object sender, RoutedEventArgs e)
-    {
-        await _network.DisconnectAsync(logout: true);
-        LoginWindow.ClearAutoLoginState();
-        var app = (App)Application.Current;
-        app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
-        Hide();
+    // ---------- Администрирование (видно только Admin) ----------
 
-        try
+    private async void BanSelectedUser_Click(object sender, RoutedEventArgs e)
+    {
+        if (ContactsListBox.SelectedItem is not ContactItem contact)
         {
-            var loginWindow = new LoginWindow();
-            bool? res = loginWindow.ShowDialog();
-            if (res == true && loginWindow.AuthenticatedUserId > 0)
-            {
-                var nextMain = new MainWindow(
-                    loginWindow.AuthenticatedUserId, loginWindow.AuthenticatedUserName,
-                    loginWindow.Token, loginWindow.ServerUrl,
-                    loginWindow.PublicKeyPem, loginWindow.PrivateKeyPem, loginWindow.Network);
-                Application.Current.MainWindow = nextMain;
-                nextMain.Show();
-                Close();
-                app.ShutdownMode = ShutdownMode.OnMainWindowClose;
-            }
-            else
-            {
-                app.Shutdown();
-            }
+            MessageBox.Show("Выберите пользователя в списке контактов.", "Администрирование",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
         }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Account switch failed");
-            app.Shutdown();
-            throw;
-        }
+
+        string? reason = ShowInputDialog("Причина блокировки", "");
+        if (reason == null) return;
+
+        var resp = await _network.BanUserAsync(new BanUserPayload { TargetId = contact.Id, Reason = reason });
+        if (resp?.Status == "Ok")
+            MessageBox.Show($"Пользователь {contact.Name} (ID: {contact.Id}) заблокирован.",
+                "Администрирование", MessageBoxButton.OK, MessageBoxImage.Information);
+        else
+            MessageBox.Show($"Не удалось заблокировать: {MapAdminError(resp?.Status)}",
+                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
     }
+
+    private async void UnbanSelectedUser_Click(object sender, RoutedEventArgs e)
+    {
+        if (ContactsListBox.SelectedItem is not ContactItem contact)
+        {
+            MessageBox.Show("Выберите пользователя в списке контактов.", "Администрирование",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var resp = await _network.UnbanUserAsync(new UnbanUserPayload { TargetId = contact.Id });
+        if (resp?.Status == "Ok")
+            MessageBox.Show($"Пользователь {contact.Name} (ID: {contact.Id}) разблокирован.",
+                "Администрирование", MessageBoxButton.OK, MessageBoxImage.Information);
+        else
+            MessageBox.Show($"Не удалось разблокировать: {MapAdminError(resp?.Status)}",
+                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    private async void ChangeRoleSelectedUser_Click(object sender, RoutedEventArgs e)
+    {
+        if (ContactsListBox.SelectedItem is not ContactItem contact)
+        {
+            MessageBox.Show("Выберите пользователя в списке контактов.", "Администрирование",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        string? role = ShowInputDialog("Роль: Admin / HR / Employee", "Employee");
+        if (string.IsNullOrWhiteSpace(role)) return;
+        if (role is not ("Admin" or "HR" or "Employee"))
+        {
+            MessageBox.Show("Недопустимая роль. Доступны: Admin, HR, Employee.",
+                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        var resp = await _network.ChangeRoleAsync(new ChangeRolePayload { TargetId = contact.Id, Role = role });
+        if (resp?.Status == "Ok")
+            MessageBox.Show($"Роль {contact.Name} (ID: {contact.Id}) изменена на {role}.",
+                "Администрирование", MessageBoxButton.OK, MessageBoxImage.Information);
+        else
+            MessageBox.Show($"Не удалось сменить роль: {MapAdminError(resp?.Status)}",
+                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    /// <summary>Нейтральные тексты результатов админ-операций.</summary>
+    private static string MapAdminError(string? status) => status switch
+    {
+        "Forbidden" => "Недостаточно прав.",
+        "NotFound" => "Пользователь не найден.",
+        "CannotBanSelf" => "Нельзя заблокировать себя.",
+        "CannotChangeOwnRole" => "Нельзя изменить собственную роль.",
+        "InvalidReason" => "Некорректная причина блокировки.",
+        "InvalidRole" => "Недопустимая роль.",
+        "NotConnected" => "Нет подключения к серверу.",
+        _ => "ошибка сервера."
+    };
 
     private void ShowMyPublicKey_Click(object sender, RoutedEventArgs e)
     {

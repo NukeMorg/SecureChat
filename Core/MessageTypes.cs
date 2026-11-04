@@ -48,10 +48,11 @@ public class LoginPayload
 /// </summary>
 public class LoginResponsePayload
 {
-    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidCredentials", "EmailNotVerified", "UserNotFound"
+    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidCredentials", "RateLimited", "Banned"
     [JsonPropertyName("UserId")] public int UserId { get; set; }
     [JsonPropertyName("UserName")] public string UserName { get; set; } = "";
     [JsonPropertyName("Token")] public string Token { get; set; } = "";
+    [JsonPropertyName("Role")] public string Role { get; set; } = "Employee";
 }
 
 /// <summary>
@@ -71,9 +72,10 @@ public class RegisterAccountPayload
 /// </summary>
 public class RegisterAccountResponsePayload
 {
-    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidCode", "CodeExpired", "UserExists", "Error"
+    [JsonPropertyName("Status")] public string Status { get; set; } = ""; // "Ok", "InvalidCode", "CodeExpired", "UserExists", "InvalidEmail", "WeakPassword", "InvalidUserName", "Error"
     [JsonPropertyName("AssignedId")] public int AssignedId { get; set; }
     [JsonPropertyName("Token")] public string Token { get; set; } = "";
+    [JsonPropertyName("Role")] public string Role { get; set; } = "Employee";
 }
 
 /// <summary>
@@ -93,6 +95,7 @@ public class HelloResponsePayload
     [JsonPropertyName("Status")] public string Status { get; set; } = "";
     [JsonPropertyName("UserId")] public int UserId { get; set; }
     [JsonPropertyName("UserName")] public string UserName { get; set; } = "";
+    [JsonPropertyName("Role")] public string Role { get; set; } = "Employee";
 }
 
 /// <summary>
@@ -308,4 +311,38 @@ public class AuditLogEntry
     [JsonPropertyName("TargetId")] public int? TargetId { get; set; }
     [JsonPropertyName("Result")] public string Result { get; set; } = "";
     [JsonPropertyName("IpAddress")] public string IpAddress { get; set; } = "";
+}
+
+/// <summary>
+/// Запрос блокировки пользователя (только Admin).
+/// </summary>
+public class BanUserPayload
+{
+    [JsonPropertyName("TargetId")] public int TargetId { get; set; }
+    [JsonPropertyName("Reason")] public string Reason { get; set; } = "";
+}
+
+/// <summary>
+/// Запрос разблокировки пользователя (только Admin).
+/// </summary>
+public class UnbanUserPayload
+{
+    [JsonPropertyName("TargetId")] public int TargetId { get; set; }
+}
+
+/// <summary>
+/// Запрос смены роли (только Admin): "Admin" | "HR" | "Employee".
+/// </summary>
+public class ChangeRolePayload
+{
+    [JsonPropertyName("TargetId")] public int TargetId { get; set; }
+    [JsonPropertyName("Role")] public string Role { get; set; } = "Employee";
+}
+
+/// <summary>
+/// Уведомление о блокировке аккаунта (сервер → заблокированный клиент).
+/// </summary>
+public class BannedPayload
+{
+    [JsonPropertyName("Reason")] public string Reason { get; set; } = "";
 }

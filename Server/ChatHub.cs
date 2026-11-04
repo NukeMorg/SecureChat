@@ -34,6 +34,16 @@ public class ChatHub : Hub
         if (!string.IsNullOrEmpty(token)) Context.Items[SessionTokenKey] = token;
     }
 
+    private string? Role() => UserId is int uid ? _db.GetUserRole(uid) : null;
+
+    private bool IsAdmin() => Role() == "Admin";
+
+    private string ClientIp =>
+        Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+    private void WriteAudit(int? actorId, string action, int? targetId, string result) =>
+        _db.WriteAudit(actorId, action, targetId, result, ClientIp);
+
     // ---------- Аутентификация ----------
 
     public async Task SendEmailCode(SendEmailCodePayload? p)
@@ -94,20 +104,35 @@ public class ChatHub : Hub
         if (auth == null)
         {
             _db.RecordFailedLogin(p.Email, ip);
+            WriteAudit(null, "FailedLogin", null, "InvalidCredentials");
             _log.Warning("Invalid credentials for {MaskedEmail}", PiiMasking.Email(p.Email));
             await Respond("LoginResponse", new LoginResponsePayload { Status = "InvalidCredentials" });
             return;
         }
 
         int userId = auth.Value.id;
+
+        if (!_db.IsUserActive(userId))
+        {
+            WriteAudit(userId, "Login", userId, "Banned");
+            _log.Warning("Login rejected: banned userId={UserId}", userId);
+            await Respond("LoginResponse", new LoginResponsePayload { Status = "Banned" });
+            return;
+        }
+
         _registry.Register(userId, Context.ConnectionId);
         RememberSessionToken(auth.Value.token);
 
+        WriteAudit(userId, "Login", userId, "Ok");
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Login", userId);
         _log.Information("Login successful userId={UserId}", userId);
 
         await Respond("LoginResponse",
-            new LoginResponsePayload { Status = "Ok", UserId = userId, UserName = auth.Value.name, Token = auth.Value.token });
+            new LoginResponsePayload
+            {
+                Status = "Ok", UserId = userId, UserName = auth.Value.name,
+                Token = auth.Value.token, Role = _db.GetUserRole(userId)
+            });
 
         await NotifyOnlineStatus(userId);
         await PushPendingMessages(userId);
@@ -162,8 +187,13 @@ public class ChatHub : Hub
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Register", userId);
         _log.Information("New user registered userId={UserId}", userId);
 
+        WriteAudit(userId, "Register", userId, "Ok");
+
         await Respond("RegisterAccountResponse",
-            new RegisterAccountResponsePayload { Status = "Ok", AssignedId = userId, Token = reg.Value.token });
+            new RegisterAccountResponsePayload
+            {
+                Status = "Ok", AssignedId = userId, Token = reg.Value.token, Role = _db.GetUserRole(userId)
+            });
 
         await NotifyOnlineStatus(userId);
     }
@@ -190,7 +220,10 @@ public class ChatHub : Hub
         _log.Information("Hello: reconnect userId={UserId}", userId.Value);
 
         await Respond("HelloResponse",
-            new HelloResponsePayload { Status = "Ok", UserId = userId.Value, UserName = name });
+            new HelloResponsePayload
+            {
+                Status = "Ok", UserId = userId.Value, UserName = name, Role = _db.GetUserRole(userId.Value)
+            });
 
         await NotifyOnlineStatus(userId.Value);
         await PushPendingMessages(userId.Value);
@@ -212,6 +245,72 @@ public class ChatHub : Hub
         await Clients.AllExcept(Context.ConnectionId).SendAsync("UserOffline",
             new OnlineStatusPayload { UserId = uid });
         Context.Abort();
+    }
+
+    // ---------- Администрирование (только Admin, таблица 1.1.3) ----------
+
+    public async Task<SimpleStatusPayload> BanUser(BanUserPayload? p)
+    {
+        if (!IsAdmin()) return new SimpleStatusPayload { Status = "Forbidden" };
+        if (p == null || p.TargetId <= 0 || !_db.UserExists(p.TargetId))
+            return new SimpleStatusPayload { Status = "NotFound" };
+        if (p.TargetId == UserId)
+            return new SimpleStatusPayload { Status = "CannotBanSelf" };
+        if (p.Reason.Length > 200 || Validators.HasControlCharacters(p.Reason))
+            return new SimpleStatusPayload { Status = "InvalidReason" };
+
+        int adminId = UserId!.Value;
+        _db.SetUserActive(p.TargetId, false);
+        _db.RevokeAllUserSessions(p.TargetId); // требование 1.1.5: отзыв сессий при бане
+
+        foreach (var connId in _registry.GetConnections(p.TargetId))
+        {
+            // заблокированный клиент получит событие и отключится сам
+            await Clients.Client(connId).SendAsync("Banned", new BannedPayload { Reason = p.Reason });
+        }
+
+        WriteAudit(adminId, "BanUser", p.TargetId, "Ok");
+        _log.ForContext("Audit", true).Information("AUDIT {Action} adminId={AdminId} targetId={TargetId}",
+            "BanUser", adminId, p.TargetId);
+
+        return new SimpleStatusPayload { Status = "Ok" };
+    }
+
+    public Task<SimpleStatusPayload> UnbanUser(UnbanUserPayload? p)
+    {
+        if (!IsAdmin()) return Task.FromResult(new SimpleStatusPayload { Status = "Forbidden" });
+        if (p == null || p.TargetId <= 0 || !_db.UserExists(p.TargetId))
+            return Task.FromResult(new SimpleStatusPayload { Status = "NotFound" });
+
+        int adminId = UserId!.Value;
+        _db.SetUserActive(p.TargetId, true);
+
+        WriteAudit(adminId, "UnbanUser", p.TargetId, "Ok");
+        _log.ForContext("Audit", true).Information("AUDIT {Action} adminId={AdminId} targetId={TargetId}",
+            "UnbanUser", adminId, p.TargetId);
+
+        return Task.FromResult(new SimpleStatusPayload { Status = "Ok" });
+    }
+
+    public Task<SimpleStatusPayload> ChangeRole(ChangeRolePayload? p)
+    {
+        if (!IsAdmin()) return Task.FromResult(new SimpleStatusPayload { Status = "Forbidden" });
+        if (p == null || p.TargetId <= 0 || !_db.UserExists(p.TargetId))
+            return Task.FromResult(new SimpleStatusPayload { Status = "NotFound" });
+        if (p.TargetId == UserId)
+            // защита от потери последнего Admin
+            return Task.FromResult(new SimpleStatusPayload { Status = "CannotChangeOwnRole" });
+        if (p.Role is not ("Admin" or "HR" or "Employee"))
+            return Task.FromResult(new SimpleStatusPayload { Status = "InvalidRole" });
+
+        int adminId = UserId!.Value;
+        _db.SetUserRole(p.TargetId, p.Role);
+
+        WriteAudit(adminId, "ChangeRole", p.TargetId, "Ok");
+        _log.ForContext("Audit", true).Information("AUDIT {Action} adminId={AdminId} targetId={TargetId} role={Role}",
+            "ChangeRole", adminId, p.TargetId, p.Role);
+
+        return Task.FromResult(new SimpleStatusPayload { Status = "Ok" });
     }
 
     // ---------- Direct-чаты ----------
@@ -398,6 +497,7 @@ public class ChatHub : Hub
             _log.ForContext("Audit", true).Information(
                 "AUDIT {Action} userId={UserId} connectionId={ConnectionId}",
                 "Logout", userId, Context.ConnectionId);
+            WriteAudit(userId, "Logout", userId, "Ok");
             await Clients.AllExcept(Context.ConnectionId).SendAsync("UserOffline",
                 new OnlineStatusPayload { UserId = userId });
         }
