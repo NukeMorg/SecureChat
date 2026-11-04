@@ -38,6 +38,11 @@ public class NetworkService
     public event Action<int>? OnUserOnline;
     public event Action<int>? OnUserOffline;
     public event Action<string>? OnBanned;
+    public event Action<GroupKeyDeliveryPayload>? OnGroupKeyDelivery;
+    public event Action<ChannelKeyRotatedPayload>? OnChannelKeyRotated;
+    public event Action<ChannelMemberAddedPayload>? OnChannelMemberAdded;
+    public event Action<ChannelMemberRemovedPayload>? OnChannelMemberRemoved;
+    public event Action<IncomingChannelMessagePayload>? OnIncomingChannelMessage;
 
     public bool IsConnected => _hub?.State == HubConnectionState.Connected;
 
@@ -159,20 +164,57 @@ public class NetworkService
     public Task<AuditLogResponsePayload?> GetAuditLogAsync(GetAuditLogPayload payload) =>
         InvokeWithResultAsync<AuditLogResponsePayload>("GetAuditLog", payload);
 
+    // ---------- Каналы (Фаза C) ----------
+
+    public Task<CreateChannelResponsePayload?> CreateChannelAsync(CreateChannelPayload payload) =>
+        InvokeWithResultAsync<CreateChannelResponsePayload>("CreateChannel", payload);
+
+    public Task<ChannelListPayload?> GetChannelsAsync() =>
+        InvokeWithResultAsync<ChannelListPayload>("GetChannels", null);
+
+    public Task<ChannelMembersPayload?> GetChannelMembersAsync(JoinChannelPayload payload) =>
+        InvokeWithResultAsync<ChannelMembersPayload>("GetChannelMembers", payload);
+
+    public Task<SimpleStatusPayload?> JoinChannelAsync(JoinChannelPayload payload) =>
+        InvokeWithResultAsync("JoinChannel", payload);
+
+    public Task<SimpleStatusPayload?> LeaveChannelAsync(JoinChannelPayload payload) =>
+        InvokeWithResultAsync("LeaveChannel", payload);
+
+    public Task<SimpleStatusPayload?> AddChannelMemberAsync(AddChannelMemberPayload payload) =>
+        InvokeWithResultAsync("AddChannelMember", payload);
+
+    public Task<SimpleStatusPayload?> RemoveChannelMemberAsync(RemoveChannelMemberPayload payload) =>
+        InvokeWithResultAsync("RemoveChannelMember", payload);
+
+    public Task SendGroupKeyDeliveryAsync(GroupKeyDeliveryPayload payload) =>
+        InvokeAsync("SendGroupKeyDelivery", payload);
+
+    public Task SendChannelKeyRotatedAsync(ChannelKeyRotatedPayload payload) =>
+        InvokeAsync("SendChannelKeyRotated", payload);
+
+    public Task SendChannelMessageAsync(SendChannelMessagePayload payload) =>
+        InvokeAsync("SendChannelMessage", payload);
+
+    public Task<ChannelHistoryResponsePayload?> GetChannelHistoryAsync(GetChannelHistoryPayload payload) =>
+        InvokeWithResultAsync<ChannelHistoryResponsePayload>("GetChannelHistory", payload);
+
     /// <summary>Вызов хаб-метода с ответом-статусом (Admin-операции, смена пароля).</summary>
     private Task<SimpleStatusPayload?> InvokeWithResultAsync(string methodName, object payload) =>
         InvokeWithResultAsync<SimpleStatusPayload>(methodName, payload);
 
-    /// <summary>Вызов хаб-метода с типизированным ответом.</summary>
-    private async Task<TResponse?> InvokeWithResultAsync<TResponse>(string methodName, object payload)
+    /// <summary>Вызов хаб-метода с типизированным ответом (payload = null — метод без аргументов).</summary>
+    private async Task<TResponse?> InvokeWithResultAsync<TResponse>(string? methodName, object? payload = null)
     {
         var hub = _hub;
-        if (hub == null || hub.State != HubConnectionState.Connected)
+        if (hub == null || hub.State != HubConnectionState.Connected || methodName == null)
             return default;
 
         await _sendLock.WaitAsync();
         try
         {
+            if (payload == null)
+                return await hub.InvokeAsync<TResponse?>(methodName);
             return await hub.InvokeAsync<TResponse?>(methodName, payload);
         }
         catch (Exception ex)
@@ -249,6 +291,11 @@ public class NetworkService
         hub.On<OnlineStatusPayload>("UserOffline", p => OnUserOffline?.Invoke(p.UserId));
         hub.On<SimpleStatusPayload>("Error", p => OnError?.Invoke(p?.Status ?? "UnknownError"));
         hub.On<BannedPayload>("Banned", p => OnBanned?.Invoke(p?.Reason ?? ""));
+        hub.On<GroupKeyDeliveryPayload>("GroupKeyDelivery", p => OnGroupKeyDelivery?.Invoke(p));
+        hub.On<ChannelKeyRotatedPayload>("ChannelKeyRotated", p => OnChannelKeyRotated?.Invoke(p));
+        hub.On<ChannelMemberAddedPayload>("ChannelMemberAdded", p => OnChannelMemberAdded?.Invoke(p));
+        hub.On<ChannelMemberRemovedPayload>("ChannelMemberRemoved", p => OnChannelMemberRemoved?.Invoke(p));
+        hub.On<IncomingChannelMessagePayload>("IncomingChannelMessage", p => OnIncomingChannelMessage?.Invoke(p));
     }
 
     private async Task OnHubReconnected(string? connectionId)

@@ -16,6 +16,10 @@ public class DialogMessage
     public bool IsOutgoing { get; set; }
     public DateTime Timestamp { get; set; }
 
+    // Каналы: имя отправителя над текстом (у Direct-сообщений пустое)
+    public string SenderName { get; set; } = "";
+    public bool HasSenderName => !string.IsNullOrEmpty(SenderName);
+
     // Видимость блоков в зависимости от типа содержимого
     public Visibility TextVisibility => ContentType == "Text" ? Visibility.Visible : Visibility.Collapsed;
     public Visibility FileVisibility => ContentType == "File" ? Visibility.Visible : Visibility.Collapsed;

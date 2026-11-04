@@ -35,6 +35,13 @@ public partial class MainWindow : Window
     private readonly Dictionary<int, ObservableCollection<DialogMessage>> _allDialogs = new();
     private ICollectionView _contactsView;
 
+    private readonly ObservableCollection<ChannelItem> _channels = new();
+    private readonly ChannelCrypto _channelCrypto = new();
+    private readonly Dictionary<string, ObservableCollection<DialogMessage>> _allChannelMessages = new();
+    private readonly Dictionary<string, Dictionary<int, string>> _channelMemberNames = new();
+    private readonly HashSet<string> _loadedChannelIds = new();
+    private ChannelItem? _currentChannel;
+
     private NetworkService _network;
     private CryptoService _crypto = new();
     private DialogManager _dialogManager;
@@ -92,6 +99,11 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(() => MessageBox.Show(MapErrorText(err), "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error));
         };
         _network.OnBanned += reason => Dispatcher.Invoke(() => _ = OnBannedAsync(reason));
+        _network.OnGroupKeyDelivery += OnGroupKeyDelivery;
+        _network.OnChannelKeyRotated += p => Dispatcher.Invoke(() => { /* состояние сбросится при доставке нового ключа */ });
+        _network.OnChannelMemberAdded += p => Dispatcher.Invoke(() => _ = RefreshChannelsAsync());
+        _network.OnChannelMemberRemoved += p => Dispatcher.Invoke(() => _ = OnChannelMemberRemovedAsync(p));
+        _network.OnIncomingChannelMessage += OnIncomingChannelMessage;
         _network.OnUserProfileUpdated += OnUserProfileUpdated;
         _network.OnUserInfoResponse += OnUserInfoResponse;
         _network.OnHistoryResponse += OnHistoryResponse;
@@ -239,6 +251,10 @@ public partial class MainWindow : Window
         UserIdTextBlock.Text = $"{_userName} (ID: {_clientId})";
         ConnectionIndicator.Fill = _network.IsConnected ? new SolidColorBrush(Colors.LimeGreen) : new SolidColorBrush(Colors.Gray);
         AdminMenu.Visibility = _role == "Admin" ? Visibility.Visible : Visibility.Collapsed;
+        bool hrOrAdmin = _role is "Admin" or "HR";
+        ChannelCreateMenuItem.Visibility = hrOrAdmin ? Visibility.Visible : Visibility.Collapsed;
+        ChannelAddMemberMenuItem.Visibility = hrOrAdmin ? Visibility.Visible : Visibility.Collapsed;
+        ChannelRemoveMemberMenuItem.Visibility = hrOrAdmin ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void UpdateConnectionStatus(bool connected)
@@ -502,6 +518,374 @@ public partial class MainWindow : Window
         var window = new ProfileWindow(profile) { Owner = this };
         window.Show();
     }
+
+    // ---------- Каналы: список, создание, участники, ротация ключа (Фаза C) ----------
+
+    private async void ListModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        bool channelsMode = ListModeComboBox.SelectedIndex == 1;
+        ContactsListBox.Visibility = channelsMode ? Visibility.Collapsed : Visibility.Visible;
+        ChannelsListBox.Visibility = channelsMode ? Visibility.Visible : Visibility.Collapsed;
+        if (channelsMode) await RefreshChannelsAsync();
+    }
+
+    private async Task RefreshChannelsAsync()
+    {
+        var list = await _network.GetChannelsAsync();
+        if (list == null) return;
+        _channels.Clear();
+        foreach (var c in list.Channels)
+        {
+            _channels.Add(new ChannelItem
+            {
+                Id = c.Id,
+                Name = c.Name,
+                OwnerId = c.OwnerId,
+                IsOwner = c.OwnerId == _clientId,
+                Subtitle = $"{c.MembersCount} участн. · владелец: {c.OwnerName}"
+            });
+        }
+    }
+
+    private async void RefreshChannels_Click(object sender, RoutedEventArgs e)
+    {
+        await RefreshChannelsAsync();
+        ChannelsListBox.SelectedItem = _currentChannel;
+    }
+
+    private async void CreateChannel_Click(object sender, RoutedEventArgs e)
+    {
+        string? name = ShowInputDialog("Название канала (1–100 символов)", "");
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        var resp = await _network.CreateChannelAsync(new CreateChannelPayload { Name = name });
+        if (resp?.Status == "Ok")
+        {
+            // Owner генерирует GroupKey локально; доставки другим не нужны (участников пока нет)
+            _channelCrypto.SetGroupKey(resp.ChannelId, _crypto.GenerateSessionKey());
+            await RefreshChannelsAsync();
+            ListModeComboBox.SelectedIndex = 1;
+        }
+        else
+        {
+            MessageBox.Show($"Не удалось создать канал: {MapChannelError(resp?.Status)}",
+                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void AddChannelMember_Click(object sender, RoutedEventArgs e)
+    {
+        if (ChannelsListBox.SelectedItem is not ChannelItem channel)
+        {
+            MessageBox.Show("Выберите канал в списке (режим «Каналы»).", "Каналы",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!int.TryParse(ShowInputDialog("ID пользователя для добавления", ""), out int userId) || userId <= 0)
+            return;
+
+        var resp = await _network.AddChannelMemberAsync(new AddChannelMemberPayload
+        { ChannelId = channel.Id, UserId = userId });
+        if (resp?.Status != "Ok")
+        {
+            MessageBox.Show($"Не удалось добавить участника: {MapChannelError(resp?.Status)}",
+                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        // backward secrecy: новый ключ доставляется всем, включая нового участника
+        await RotateChannelKeyAsync(channel.Id);
+        await RefreshChannelsAsync();
+    }
+
+    /// <summary>Канал, ротация которого уже выполнена вручную (чтобы не сработать дважды на то же событие).</summary>
+    private string? _rotationDoneForRemovedEvent;
+
+    private async Task OnChannelMemberRemovedAsync(ChannelMemberRemovedPayload p)
+    {
+        var channel = _channels.FirstOrDefault(c => c.Id == p.ChannelId);
+        await RefreshChannelsAsync();
+
+        // forward secrecy при бане/удалении: Owner канала ротирует ключ (требование 1.2.7).
+        // При ручном удалении ротацию уже выполнил действующий HR/Admin — пропускаем.
+        if (channel != null && channel.OwnerId == _clientId &&
+            _rotationDoneForRemovedEvent != p.ChannelId)
+        {
+            await RotateChannelKeyAsync(p.ChannelId);
+        }
+        if (_rotationDoneForRemovedEvent == p.ChannelId)
+            _rotationDoneForRemovedEvent = null;
+    }
+
+    private async void RemoveChannelMember_Click(object sender, RoutedEventArgs e)
+    {
+        if (ChannelsListBox.SelectedItem is not ChannelItem channel)
+        {
+            MessageBox.Show("Выберите канал в списке (режим «Каналы»).", "Каналы",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!int.TryParse(ShowInputDialog("ID пользователя для удаления", ""), out int userId) || userId <= 0)
+            return;
+
+        var resp = await _network.RemoveChannelMemberAsync(new RemoveChannelMemberPayload
+        { ChannelId = channel.Id, UserId = userId });
+        if (resp?.Status != "Ok")
+        {
+            MessageBox.Show($"Не удалось удалить участника: {MapChannelError(resp?.Status)}",
+                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        // forward secrecy: новый ключ — только оставшимся участникам;
+        // пришедшее следом событие ChannelMemberRemoved пропускаем, чтобы не ротировать дважды
+        _rotationDoneForRemovedEvent = channel.Id;
+        await RotateChannelKeyAsync(channel.Id);
+        await RefreshChannelsAsync();
+    }
+
+    /// <summary>
+    /// Ротация GroupKey: новый CSPRNG-ключ, доставка каждому участнику через 1-1 E2E
+    /// (RSA + существующий EncryptedKey-механизм), анонс ChannelKeyRotated в группу.
+    /// Сервер видит только зашифрованные копии ключа.
+    /// </summary>
+    private async Task RotateChannelKeyAsync(string channelId)
+    {
+        byte[] newKey = _crypto.GenerateSessionKey();
+        long version = _channelCrypto.SetGroupKey(channelId, newKey);
+
+        var members = await _network.GetChannelMembersAsync(new JoinChannelPayload { ChannelId = channelId });
+        if (members == null) return;
+
+        foreach (var member in members.Members)
+        {
+            if (member.UserId == _clientId) continue; // свой ключ уже установлен
+            string? pubKey = await EnsurePublicKeyAsync(member.UserId);
+            if (pubKey == null)
+            {
+                Log.Warning("Skip key delivery: no public key userId={UserId} channelId={ChannelId}",
+                    member.UserId, channelId);
+                continue;
+            }
+            byte[] encKey = _crypto.RsaEncrypt(pubKey, newKey);
+            await _network.SendGroupKeyDeliveryAsync(new GroupKeyDeliveryPayload
+            {
+                ChannelId = channelId,
+                TargetId = member.UserId,
+                Version = version,
+                EncryptedKey = Convert.ToBase64String(encKey)
+            });
+        }
+
+        await _network.SendChannelKeyRotatedAsync(new ChannelKeyRotatedPayload
+        { ChannelId = channelId, Version = version });
+        Log.Information("GroupKey rotated channelId={ChannelId} version={Version} members={Count}",
+            channelId, version, members.Members.Count);
+    }
+
+    /// <summary>Приём GroupKey: расшифровка своим приватным ключом, сброс ratchet-цепочек.</summary>
+    private void OnGroupKeyDelivery(GroupKeyDeliveryPayload payload)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            try
+            {
+                byte[] encKey = Convert.FromBase64String(payload.EncryptedKey);
+                byte[] groupKey = _crypto.RsaDecrypt(_privateKeyPem, encKey);
+                _channelCrypto.SetGroupKey(payload.ChannelId, groupKey, payload.Version);
+                Log.Information("GroupKey accepted channelId={ChannelId} version={Version}",
+                    payload.ChannelId, payload.Version);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to accept GroupKey channelId={ChannelId}", payload.ChannelId);
+            }
+        });
+    }
+
+    // ---------- Каналы: переписка и история ----------
+
+    private async void ChannelsListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ChannelsListBox.SelectedItem is not ChannelItem channel) return;
+        _currentChannel = channel;
+        _currentContactId = -1;
+
+        if (!_allChannelMessages.ContainsKey(channel.Id))
+            _allChannelMessages[channel.Id] = new ObservableCollection<DialogMessage>();
+        MessagesListBox.ItemsSource = _allChannelMessages[channel.Id];
+
+        await CacheChannelMemberNamesAsync(channel.Id);
+        await EnsureChannelHistoryAsync(channel.Id);
+    }
+
+    private async Task CacheChannelMemberNamesAsync(string channelId)
+    {
+        if (_channelMemberNames.ContainsKey(channelId)) return;
+        var resp = await _network.GetChannelMembersAsync(new JoinChannelPayload { ChannelId = channelId });
+        if (resp == null) return;
+        _channelMemberNames[channelId] = resp.Members.ToDictionary(m => m.UserId, m => m.UserName);
+    }
+
+    private string GetChannelMemberName(string channelId, int userId) =>
+        _channelMemberNames.TryGetValue(channelId, out var names) && names.TryGetValue(userId, out var name)
+            ? name
+            : $"User {userId}";
+
+    private async Task EnsureChannelHistoryAsync(string channelId)
+    {
+        if (_loadedChannelIds.Contains(channelId)) return;
+        _loadedChannelIds.Add(channelId);
+
+        var resp = await _network.GetChannelHistoryAsync(new GetChannelHistoryPayload
+        { ChannelId = channelId, Limit = 50 });
+        if (resp == null) return;
+
+        var messages = resp.Messages;
+        messages.Reverse(); // сервер отдаёт по убыванию времени; расшифровка — по возрастанию
+
+        foreach (var m in messages)
+        {
+            if (m.ContentType != "Text" || string.IsNullOrEmpty(m.Ciphertext)) continue;
+            byte[]? key = _channelCrypto.DeriveMessageKeyAt(channelId, m.SenderId, m.ChainIteration);
+            if (key == null)
+            {
+                Log.Warning("History skipped: no GroupKey channelId={ChannelId} messageId={MessageId}", channelId, m.MessageId);
+                continue;
+            }
+            try
+            {
+                byte[] plain = _crypto.AesGcmDecrypt(key,
+                    Convert.FromBase64String(m.Nonce ?? ""),
+                    Convert.FromBase64String(m.Ciphertext),
+                    Convert.FromBase64String(m.Tag ?? ""));
+
+                AddChannelMessage(channelId, new DialogMessage
+                {
+                    Id = m.MessageId,
+                    SenderId = m.SenderId,
+                    Text = Encoding.UTF8.GetString(plain),
+                    ContentType = "Text",
+                    Status = "",
+                    IsOutgoing = m.SenderId == _clientId,
+                    SenderName = m.SenderId == _clientId ? "" : GetChannelMemberName(channelId, m.SenderId),
+                    Timestamp = DateTime.Parse(m.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "History decrypt failed channelId={ChannelId} messageId={MessageId}", channelId, m.MessageId);
+            }
+        }
+    }
+
+    private void AddChannelMessage(string channelId, DialogMessage msg)
+    {
+        if (!_allChannelMessages.ContainsKey(channelId))
+            _allChannelMessages[channelId] = new ObservableCollection<DialogMessage>();
+        if (_allChannelMessages[channelId].Any(m => m.Id == msg.Id)) return;
+        _allChannelMessages[channelId].Add(msg);
+        if (_currentChannel?.Id == channelId)
+            MessagesListBox.ItemsSource = _allChannelMessages[channelId];
+    }
+
+    private void OnIncomingChannelMessage(IncomingChannelMessagePayload msg)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            byte[]? key = _channelCrypto.GetMessageKey(msg.ChannelId, msg.SenderId, msg.ChainIteration);
+            if (key == null)
+            {
+                Log.Warning("Channel message dropped (no key or replay) channelId={ChannelId} senderId={SenderId} iteration={Iteration}",
+                    msg.ChannelId, msg.SenderId, msg.ChainIteration);
+                return;
+            }
+            if (msg.ContentType != "Text" || msg.EncryptedData == null) return;
+
+            try
+            {
+                byte[] plain = _crypto.AesGcmDecrypt(key,
+                    Convert.FromBase64String(msg.EncryptedData.Nonce),
+                    Convert.FromBase64String(msg.EncryptedData.Ciphertext),
+                    Convert.FromBase64String(msg.EncryptedData.Tag));
+
+                AddChannelMessage(msg.ChannelId, new DialogMessage
+                {
+                    Id = msg.MessageId,
+                    SenderId = msg.SenderId,
+                    Text = Encoding.UTF8.GetString(plain),
+                    ContentType = "Text",
+                    Status = "",
+                    IsOutgoing = msg.SenderId == _clientId,
+                    SenderName = msg.SenderId == _clientId ? "" : GetChannelMemberName(msg.ChannelId, msg.SenderId),
+                    Timestamp = DateTime.Parse(msg.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Channel message decrypt failed channelId={ChannelId} messageId={MessageId}",
+                    msg.ChannelId, msg.MessageId);
+            }
+        });
+    }
+
+    /// <summary>Отправка сообщения в канал: MessageKey из ratchet, AES-GCM, ChainIteration.</summary>
+    private async Task SendChannelMessageTextAsync(string channelId, string text)
+    {
+        var next = _channelCrypto.GetNextMessageKey(channelId, _clientId);
+        if (next == null)
+        {
+            MessageBox.Show("Ключ канала ещё не получен — дождитесь доставки от владельца.",
+                "Каналы", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        var (messageKey, iteration) = next.Value;
+
+        byte[] plain = Encoding.UTF8.GetBytes(text);
+        var (ct, nonce, tag) = _crypto.AesGcmEncrypt(messageKey, plain);
+        string msgId = Guid.NewGuid().ToString();
+
+        AddChannelMessage(channelId, new DialogMessage
+        {
+            Id = msgId,
+            SenderId = _clientId,
+            Text = text,
+            ContentType = "Text",
+            Status = "",
+            IsOutgoing = true,
+            Timestamp = DateTime.Now
+        });
+
+        await _network.SendChannelMessageAsync(new SendChannelMessagePayload
+        {
+            ChannelId = channelId,
+            MessageId = msgId,
+            ChainIteration = iteration,
+            EncryptedData = new EncryptedData
+            {
+                Nonce = Convert.ToBase64String(nonce),
+                Ciphertext = Convert.ToBase64String(ct),
+                Tag = Convert.ToBase64String(tag)
+            },
+            ContentType = "Text"
+        });
+
+        Log.Information("Channel message sent channelId={ChannelId} length={Length} iteration={Iteration} messageId={MessageId}",
+            channelId, text.Length, iteration, msgId);
+    }
+
+    private static string MapChannelError(string? status) => status switch
+    {
+        "Forbidden" => "Недостаточно прав (нужна роль HR или Admin).",
+        "NotFound" => "Канал или пользователь не найден.",
+        "InvalidName" => "Название: 1–100 символов, без управляющих символов.",
+        "NameExists" => "Канал с таким названием уже существует.",
+        "AlreadyMember" => "Пользователь уже участник канала.",
+        "CannotRemoveOwner" => "Нельзя удалить владельца канала.",
+        "CannotRemoveSelf" => "Нельзя удалить себя.",
+        "NotConnected" => "Нет подключения к серверу.",
+        _ => "ошибка сервера."
+    };
 
     private void ShowMyPublicKey_Click(object sender, RoutedEventArgs e)
     {
@@ -785,6 +1169,7 @@ public partial class MainWindow : Window
     {
         if (ContactsListBox.SelectedItem is ContactItem contact)
         {
+            _currentChannel = null;
             _currentContactId = contact.Id;
             if (!_allDialogs.ContainsKey(_currentContactId))
                 _allDialogs[_currentContactId] = new ObservableCollection<DialogMessage>();
@@ -797,6 +1182,27 @@ public partial class MainWindow : Window
 
     private async void SendButton_Click(object sender, RoutedEventArgs e)
     {
+        // режим «Каналы»: сообщение уходит в канал через групповой ключ
+        if (ListModeComboBox.SelectedIndex == 1)
+        {
+            if (_currentChannel == null)
+            {
+                MessageBox.Show("Выберите канал", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            string channelText = MessageTextBox.Text.Trim();
+            if (string.IsNullOrEmpty(channelText)) return;
+            if (channelText.Length > 4000)
+            {
+                MessageBox.Show("Сообщение слишком длинное: максимум 4000 символов.",
+                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            await SendChannelMessageTextAsync(_currentChannel.Id, channelText);
+            MessageTextBox.Clear();
+            return;
+        }
+
         if (_currentContactId <= 0) { MessageBox.Show("Выберите получателя", "Информация", MessageBoxButton.OK, MessageBoxImage.Information); return; }
         // NFC-нормализация до шифрования (требование 1.4.2)
         string text = TextNormalizer.NormalizeToNfc(MessageTextBox.Text.Trim());
