@@ -22,8 +22,8 @@ public class Program
 
         builder.Services.AddSignalR(options =>
         {
-            // inline E2E-вложения: шифртекст файла + ключи + base64-накладные расходы
-            options.MaximumReceiveMessageSize = 12 * 1024 * 1024;
+            // inline E2E-вложения: 10 МБ файл + base64-накладные расходы и метаданные
+            options.MaximumReceiveMessageSize = 20 * 1024 * 1024;
         });
 
         string baseUrl = builder.Configuration["Server:BaseUrl"] ?? "http://*:9000";

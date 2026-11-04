@@ -38,7 +38,7 @@ public class ChatHub : Hub
 
     public async Task SendEmailCode(SendEmailCodePayload? p)
     {
-        if (p == null || string.IsNullOrWhiteSpace(p.Email) || !p.Email.Contains('@'))
+        if (p == null || !Validators.IsValidEmail(p.Email))
         {
             await Respond("SendEmailCodeResponse",
                 new SendEmailCodeResponsePayload { Status = "InvalidEmail", Message = "Некорректный адрес почты." });
@@ -73,7 +73,8 @@ public class ChatHub : Hub
 
     public async Task Login(LoginPayload? p)
     {
-        if (p == null || string.IsNullOrWhiteSpace(p.Email))
+        // нейтральный ответ без раскрытия причины (анти-enumeration)
+        if (p == null || !Validators.IsValidEmail(p.Email))
         {
             await Respond("LoginResponse", new LoginResponsePayload { Status = "InvalidCredentials" });
             return;
@@ -114,9 +115,19 @@ public class ChatHub : Hub
 
     public async Task RegisterAccount(RegisterAccountPayload? p)
     {
-        if (p == null || string.IsNullOrWhiteSpace(p.Email))
+        if (p == null || !Validators.IsValidEmail(p.Email))
         {
-            await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "Error" });
+            await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "InvalidEmail" });
+            return;
+        }
+        if (!Validators.IsValidPassword(p.Password))
+        {
+            await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "WeakPassword" });
+            return;
+        }
+        if (!Validators.IsValidUserName(p.UserName))
+        {
+            await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "InvalidUserName" });
             return;
         }
 
@@ -210,6 +221,22 @@ public class ChatHub : Hub
         int? senderId = UserId;
         if (senderId == null || p == null) return;
 
+        if (p.ReceiverId <= 0 || string.IsNullOrEmpty(p.MessageId) || p.EncryptedData == null)
+        {
+            await Respond("Error", new SimpleStatusPayload { Status = "MessageRejected" });
+            return;
+        }
+
+        // лимиты шифртекста (base64): Text — до 4000 символов UTF-8; File — до 10 МБ до кодирования
+        int maxCipherBase64 = p.ContentType == "File" ? 14_000_000 : 16_500;
+        if (string.IsNullOrEmpty(p.EncryptedData.Ciphertext) || p.EncryptedData.Ciphertext.Length > maxCipherBase64)
+        {
+            _log.Warning("Message rejected: ciphertext size limit messageId={MessageId} type={ContentType}",
+                p.MessageId, p.ContentType);
+            await Respond("Error", new SimpleStatusPayload { Status = "MessageRejected" });
+            return;
+        }
+
         using (LogContext.PushProperty("CorrelationId", p.MessageId))
         using (LogContext.PushProperty("MessageId", p.MessageId))
         {
@@ -268,7 +295,7 @@ public class ChatHub : Hub
     public async Task GetHistory(GetHistoryRequestPayload? p)
     {
         int? userId = UserId;
-        if (userId == null || p == null) return;
+        if (userId == null || p == null || p.ContactId <= 0) return;
         var messages = _db.GetHistory(userId.Value, p.ContactId);
         _log.Debug("GetHistory userId={UserId} contactId={ContactId} count={Count}", userId.Value, p.ContactId, messages.Count);
         await Respond("HistoryResponse", new HistoryResponsePayload { ContactId = p.ContactId, Messages = messages });
@@ -295,7 +322,7 @@ public class ChatHub : Hub
 
     public async Task GetPublicKey(GetPublicKeyPayload? p)
     {
-        if (p == null) return;
+        if (p == null || p.TargetId <= 0) return;
         string? key = _db.GetPublicKey(p.TargetId);
         await Respond("PublicKeyResponse",
             new PublicKeyResponsePayload { Status = key != null ? "Ok" : "NotFound", TargetId = p.TargetId, PublicKey = key ?? "" });
@@ -303,7 +330,7 @@ public class ChatHub : Hub
 
     public async Task GetUserInfo(GetUserInfoPayload? p)
     {
-        if (p == null) return;
+        if (p == null || p.TargetId <= 0) return;
         string? name = _db.GetUserName(p.TargetId);
         await Respond("UserInfoResponse",
             new UserInfoResponsePayload { Status = name != null ? "Ok" : "NotFound", UserId = p.TargetId, UserName = name ?? "" });
@@ -312,7 +339,7 @@ public class ChatHub : Hub
     public async Task AddContact(AddContactPayload? p)
     {
         int? userId = UserId;
-        if (userId == null || p == null) return;
+        if (userId == null || p == null || p.ContactId <= 0) return;
 
         if (!_db.UserExists(p.ContactId))
         {
@@ -334,6 +361,14 @@ public class ChatHub : Hub
     {
         int? userId = UserId;
         if (userId == null || p == null) return;
+
+        if (!Validators.IsValidUserName(p.UserName))
+        {
+            _log.Warning("Profile update rejected: invalid userName userId={UserId}", userId.Value);
+            await Respond("Error", new SimpleStatusPayload { Status = "InvalidUserName" });
+            return;
+        }
+
         _db.UpdateUserName(userId.Value, p.UserName);
 
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} newName={NewName}",
