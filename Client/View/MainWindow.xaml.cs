@@ -102,7 +102,7 @@ public partial class MainWindow : Window
         _network.OnGroupKeyDelivery += OnGroupKeyDelivery;
         _network.OnChannelKeyRotated += p => Dispatcher.Invoke(() => { /* состояние сбросится при доставке нового ключа */ });
         _network.OnChannelMemberAdded += p => Dispatcher.Invoke(() => _ = RefreshChannelsAsync());
-        _network.OnChannelMemberRemoved += p => Dispatcher.Invoke(() => _ = RefreshChannelsAsync());
+        _network.OnChannelMemberRemoved += p => Dispatcher.Invoke(() => _ = OnChannelMemberRemovedAsync(p));
         _network.OnIncomingChannelMessage += OnIncomingChannelMessage;
         _network.OnUserProfileUpdated += OnUserProfileUpdated;
         _network.OnUserInfoResponse += OnUserInfoResponse;
@@ -598,6 +598,25 @@ public partial class MainWindow : Window
         await RefreshChannelsAsync();
     }
 
+    /// <summary>Канал, ротация которого уже выполнена вручную (чтобы не сработать дважды на то же событие).</summary>
+    private string? _rotationDoneForRemovedEvent;
+
+    private async Task OnChannelMemberRemovedAsync(ChannelMemberRemovedPayload p)
+    {
+        var channel = _channels.FirstOrDefault(c => c.Id == p.ChannelId);
+        await RefreshChannelsAsync();
+
+        // forward secrecy при бане/удалении: Owner канала ротирует ключ (требование 1.2.7).
+        // При ручном удалении ротацию уже выполнил действующий HR/Admin — пропускаем.
+        if (channel != null && channel.OwnerId == _clientId &&
+            _rotationDoneForRemovedEvent != p.ChannelId)
+        {
+            await RotateChannelKeyAsync(p.ChannelId);
+        }
+        if (_rotationDoneForRemovedEvent == p.ChannelId)
+            _rotationDoneForRemovedEvent = null;
+    }
+
     private async void RemoveChannelMember_Click(object sender, RoutedEventArgs e)
     {
         if (ChannelsListBox.SelectedItem is not ChannelItem channel)
@@ -618,7 +637,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        // forward secrecy: новый ключ — только оставшимся участникам
+        // forward secrecy: новый ключ — только оставшимся участникам;
+        // пришедшее следом событие ChannelMemberRemoved пропускаем, чтобы не ротировать дважды
+        _rotationDoneForRemovedEvent = channel.Id;
         await RotateChannelKeyAsync(channel.Id);
         await RefreshChannelsAsync();
     }

@@ -272,6 +272,16 @@ public class ChatHub : Hub
             await Clients.Client(connId).SendAsync("Banned", new BannedPayload { Reason = p.Reason });
         }
 
+        // требование 1.1.5/1.2.7: при бане — удаление из каналов;
+        // Owner каждого канала выполнит ротацию GroupKey по событию ChannelMemberRemoved
+        foreach (var channelId in _db.DeleteUserFromAllChannels(p.TargetId))
+        {
+            foreach (var connId in _registry.GetConnections(p.TargetId))
+                await Groups.RemoveFromGroupAsync(connId, channelId);
+            await Clients.Group(channelId).SendAsync("ChannelMemberRemoved",
+                new ChannelMemberRemovedPayload { ChannelId = channelId, UserId = p.TargetId });
+        }
+
         WriteAudit(adminId, "BanUser", p.TargetId, "Ok");
         _log.ForContext("Audit", true).Information("AUDIT {Action} adminId={AdminId} targetId={TargetId}",
             "BanUser", adminId, p.TargetId);
