@@ -89,7 +89,26 @@ dotnet publish Client -c Release -r win-x64 --self-contained
 ```
 Скрипт Inno Setup: установка в Program Files, ярлыки, деинсталлятор. Code signing — самоподписанный сертификат для демо (`signtool sign /f cert.pfx`).
 
-## 6. Политики
+## 6. Локализация и интернационализация (i18n/L10n)
+
+Проект разделён два процесса в соответствии с индустриальной методологией:
+
+**Интернационализация (i18n, инженерная база — сделана разработчиком):**
+- все строки UI вынесены из кода в ресурсы: `Client/Resources/Strings.resx` (нейтральные, RU) + `Strings.en.resx` (культура `en`);
+- доступ из XAML — `{Binding [Ключ], Source={x:Static local:LocalizationSource.Instance}}`, из кода — `LocalizationSource.Get("Ключ")`; смена языка на лету — `LocalizationSource.Refresh()` (INPC по `Item[]`);
+- Unicode/UTF-8 повсеместно; NFC-нормализация текста до шифрования;
+- форматы абстрагированы от кода: даты/числа — через `CultureInfo`/`DateTimeFormatInfo`/`NumberFormatInfo` текущей культуры потока; WPF-привязки культуро-зависимы (`FrameworkElement.Language` метаданные);
+- единицы измерения — из ресурсов (`UnitBytes/UnitKilobytes/UnitMegabytes`), число — `FileSizeFormatter` (покрыт тестами на `ru-RU`/`en-US`);
+- гибкий UI: авто-размеры, `TextWrapping`, `TextTrimming` — рассчитаны на разную длину перевода.
+
+**Локализация (L10n, наполнение):**
+- переводы живут только в ресурсных файлах — добавление языка = копия `Strings.resx` с суффиксом культуры (`Strings.de.resx`) + перевод значений, код не меняется;
+- локаль хранится в полном формате ISO 639 + ISO 3166: **`ru-RU`, `en-US`** (`config.json → Language`), выбор — Вид → Настройки, применяется на лету (`CurrentCulture` + `CurrentUICulture` потока);
+- конвенция семантических ключей: `Menu*` — корневые меню, `Mi*` — пункты меню, `Select*`/`Message*`/`No*` — тексты сообщений и состояний, `Unit*` — единицы измерения;
+- логи и аудит **не локализуются** (всегда English, InvariantCulture, ISO 8601 UTC — требование 1.7.1);
+- форматирование данных (даты `g`, числа `N0`, размеры файлов) — только на отображении; на проводе и в БД — ISO 8601 UTC / InvariantCulture.
+
+## 7. Политики
 
 - **Пароли:** BCrypt, work factor 12, уникальная соль. Легаси-PBKDF2 (10 000, SHA-256) проверяется и прозрачно обновляется до BCrypt при первом успешном входе. Смена пароля отзывает все сессии.
 - **Сессии:** GUID-токен, TTL 7 дней (`ExpiresAt`), `Logout`/бан — отзыв. Автологин — `Hello` строго по токену.
@@ -98,7 +117,7 @@ dotnet publish Client -c Release -r win-x64 --self-contained
 - **Логи:** Serilog; файл JSON (10 МБ × 14, `logs/server-.log`), аудит отдельным файлом + `AuditLog`; всё English/UTC; PII маскируется (`PiiMasker`).
 - **Экспорт/печать (только клиент):** Excel (ClosedXML, formula-injection префикс `'`, даты/числа `CurrentCulture`, ≤50 000 строк), Word (OpenXML, XXE: `DtdProcessing.Prohibit`+`XmlResolver=null`), печать (FlowDocument, номера страниц, водяной знак «Конфиденциально», опция «без вложений», XPS как PDF-альтернатива). Агрегаты — один `ChatAggregator`.
 
-## 7. Модель угроз и остаточные риски
+## 8. Модель угроз и остаточные риски
 
 **Обеспечивается:** E2E Direct и Channel (сервер не видит plaintext и ключи); распределение/ротация GroupKey только через 1-1; replay-защита ratchet; брутфорс-защита; append-only аудит; секреты вне репо; DPAPI для локальных секретов; серверная валидация.
 

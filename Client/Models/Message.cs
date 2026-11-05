@@ -27,6 +27,10 @@ public class DialogMessage
     public bool IsEdited { get; set; }
     public string EditedMark => IsEdited ? " · изм." : "";
 
+    // Размер файла, отформатированный с локализованными единицами (Лаба 8)
+    public string FileSizeText { get; set; } = "";
+    public bool HasFileSize => !string.IsNullOrEmpty(FileSizeText);
+
     // Видимость блоков в зависимости от типа содержимого
     public Visibility TextVisibility => ContentType == "Text" ? Visibility.Visible : Visibility.Collapsed;
     public Visibility FileVisibility => ContentType == "File" ? Visibility.Visible : Visibility.Collapsed;

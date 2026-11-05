@@ -59,4 +59,7 @@
   <data name="Info" xml:space="preserve"><value>Info</value></data>
   <data name="Export" xml:space="preserve"><value>Export</value></data>
   <data name="Done" xml:space="preserve"><value>Done</value></data>
+  <data name="UnitBytes" xml:space="preserve"><value>B</value></data>
+  <data name="UnitKilobytes" xml:space="preserve"><value>KB</value></data>
+  <data name="UnitMegabytes" xml:space="preserve"><value>MB</value></data>
 </root>
