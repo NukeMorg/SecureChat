@@ -110,62 +110,62 @@
 
         <Menu Grid.Row="0" FontSize="13" Background="{DynamicResource SidebarBackground}" Foreground="{DynamicResource ForegroundColor}">
             <!-- Файл -->
-            <MenuItem Header="{Binding [MenuFile], Source={StaticResource Loc}}">
-                <MenuItem Header="{Binding [MiPrint], Source={StaticResource Loc}}" Click="PrintChat_Click"/>
-                <MenuItem Header="{Binding [MiSwitchAccount], Source={StaticResource Loc}}" Click="SwitchAccount_Click"/>
-                <MenuItem Header="{Binding [MiExit], Source={StaticResource Loc}}" Command="{x:Static local:MainWindow.ExitCommand}" InputGestureText="Ctrl+Q"/>
+            <MenuItem Header="{Binding [MenuFile], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiPrint], Source={x:Static local:LocalizationSource.Instance}}" Click="PrintChat_Click"/>
+                <MenuItem Header="{Binding [MiSwitchAccount], Source={x:Static local:LocalizationSource.Instance}}" Click="SwitchAccount_Click"/>
+                <MenuItem Header="{Binding [MiExit], Source={x:Static local:LocalizationSource.Instance}}" Command="{x:Static local:MainWindow.ExitCommand}" InputGestureText="Ctrl+Q"/>
             </MenuItem>
 
             <!-- Вид -->
-            <MenuItem Header="{Binding [MenuView], Source={StaticResource Loc}}">
-                <MenuItem Header="{Binding [MiSearch], Source={StaticResource Loc}}" Command="{x:Static local:MainWindow.SearchMessagesCommand}" InputGestureText="Ctrl+F"/>
+            <MenuItem Header="{Binding [MenuView], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiSearch], Source={x:Static local:LocalizationSource.Instance}}" Command="{x:Static local:MainWindow.SearchMessagesCommand}" InputGestureText="Ctrl+F"/>
                 <Separator/>
-                <MenuItem Header="{Binding [MiToggleTheme], Source={StaticResource Loc}}" Command="{x:Static local:MainWindow.ToggleThemeCommand}" InputGestureText="Ctrl+T"/>
-                <MenuItem Header="{Binding [MiSettings], Source={StaticResource Loc}}" Click="Settings_Click"/>
+                <MenuItem Header="{Binding [MiToggleTheme], Source={x:Static local:LocalizationSource.Instance}}" Command="{x:Static local:MainWindow.ToggleThemeCommand}" InputGestureText="Ctrl+T"/>
+                <MenuItem Header="{Binding [MiSettings], Source={x:Static local:LocalizationSource.Instance}}" Click="Settings_Click"/>
             </MenuItem>
 
             <!-- Профиль -->
-            <MenuItem Header="{Binding [MenuProfile], Source={StaticResource Loc}}">
-                <MenuItem Header="{Binding [MiChangeName], Source={StaticResource Loc}}" Command="{x:Static local:MainWindow.ChangeNameCommand}" InputGestureText="Ctrl+N"/>
-                <MenuItem Header="{Binding [MiChangePassword], Source={StaticResource Loc}}" Click="ChangePassword_Click"/>
-                <MenuItem Header="{Binding [MiChangeStatus], Source={StaticResource Loc}}" Click="ChangeStatus_Click"/>
-                <MenuItem Header="{Binding [MiUploadAvatar], Source={StaticResource Loc}}" Click="UploadAvatar_Click"/>
+            <MenuItem Header="{Binding [MenuProfile], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiChangeName], Source={x:Static local:LocalizationSource.Instance}}" Command="{x:Static local:MainWindow.ChangeNameCommand}" InputGestureText="Ctrl+N"/>
+                <MenuItem Header="{Binding [MiChangePassword], Source={x:Static local:LocalizationSource.Instance}}" Click="ChangePassword_Click"/>
+                <MenuItem Header="{Binding [MiChangeStatus], Source={x:Static local:LocalizationSource.Instance}}" Click="ChangeStatus_Click"/>
+                <MenuItem Header="{Binding [MiUploadAvatar], Source={x:Static local:LocalizationSource.Instance}}" Click="UploadAvatar_Click"/>
                 <Separator/>
-                <MenuItem Header="{Binding [MiMyProfile], Source={StaticResource Loc}}" Click="ShowMyProfile_Click"/>
-                <MenuItem Header="{Binding [MiSelectedProfile], Source={StaticResource Loc}}" Click="ShowSelectedProfile_Click"/>
+                <MenuItem Header="{Binding [MiMyProfile], Source={x:Static local:LocalizationSource.Instance}}" Click="ShowMyProfile_Click"/>
+                <MenuItem Header="{Binding [MiSelectedProfile], Source={x:Static local:LocalizationSource.Instance}}" Click="ShowSelectedProfile_Click"/>
                 <Separator/>
-                <MenuItem Header="{Binding [MiShowPublicKey], Source={StaticResource Loc}}" Click="ShowMyPublicKey_Click"/>
+                <MenuItem Header="{Binding [MiShowPublicKey], Source={x:Static local:LocalizationSource.Instance}}" Click="ShowMyPublicKey_Click"/>
             </MenuItem>
 
             <!-- Администрирование (видно только роли Admin) -->
-            <MenuItem Header="{Binding [MenuAdmin], Source={StaticResource Loc}}" x:Name="AdminMenu" Visibility="Collapsed">
-                <MenuItem Header="{Binding [MiBan], Source={StaticResource Loc}}" Click="BanSelectedUser_Click"/>
-                <MenuItem Header="{Binding [MiUnban], Source={StaticResource Loc}}" Click="UnbanSelectedUser_Click"/>
-                <MenuItem Header="{Binding [MiChangeRole], Source={StaticResource Loc}}" Click="ChangeRoleSelectedUser_Click"/>
+            <MenuItem Header="{Binding [MenuAdmin], Source={x:Static local:LocalizationSource.Instance}}" x:Name="AdminMenu" Visibility="Collapsed">
+                <MenuItem Header="{Binding [MiBan], Source={x:Static local:LocalizationSource.Instance}}" Click="BanSelectedUser_Click"/>
+                <MenuItem Header="{Binding [MiUnban], Source={x:Static local:LocalizationSource.Instance}}" Click="UnbanSelectedUser_Click"/>
+                <MenuItem Header="{Binding [MiChangeRole], Source={x:Static local:LocalizationSource.Instance}}" Click="ChangeRoleSelectedUser_Click"/>
                 <Separator/>
-                <MenuItem Header="{Binding [MiAuditLog], Source={StaticResource Loc}}" Click="AuditLog_Click"/>
+                <MenuItem Header="{Binding [MiAuditLog], Source={x:Static local:LocalizationSource.Instance}}" Click="AuditLog_Click"/>
             </MenuItem>
 
             <!-- Экспорт (только клиент, расшифрованные данные текущего чата) -->
-            <MenuItem Header="{Binding [MenuExport], Source={StaticResource Loc}}">
-                <MenuItem Header="{Binding [MiExcel], Source={StaticResource Loc}}" Click="ExportExcel_Click"/>
-                <MenuItem Header="{Binding [MiWord], Source={StaticResource Loc}}" Click="ExportWord_Click"/>
+            <MenuItem Header="{Binding [MenuExport], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiExcel], Source={x:Static local:LocalizationSource.Instance}}" Click="ExportExcel_Click"/>
+                <MenuItem Header="{Binding [MiWord], Source={x:Static local:LocalizationSource.Instance}}" Click="ExportWord_Click"/>
             </MenuItem>
 
             <!-- Каналы (создание и участники — только HR/Admin) -->
-            <MenuItem Header="{Binding [MenuChannels], Source={StaticResource Loc}}">
-                <MenuItem Header="{Binding [MiCreateChannel], Source={StaticResource Loc}}" x:Name="ChannelCreateMenuItem" Click="CreateChannel_Click" Visibility="Collapsed"/>
-                <MenuItem Header="{Binding [MiAddMember], Source={StaticResource Loc}}" x:Name="ChannelAddMemberMenuItem" Click="AddChannelMember_Click" Visibility="Collapsed"/>
-                <MenuItem Header="{Binding [MiRemoveMember], Source={StaticResource Loc}}" x:Name="ChannelRemoveMemberMenuItem" Click="RemoveChannelMember_Click" Visibility="Collapsed"/>
+            <MenuItem Header="{Binding [MenuChannels], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiCreateChannel], Source={x:Static local:LocalizationSource.Instance}}" x:Name="ChannelCreateMenuItem" Click="CreateChannel_Click" Visibility="Collapsed"/>
+                <MenuItem Header="{Binding [MiAddMember], Source={x:Static local:LocalizationSource.Instance}}" x:Name="ChannelAddMemberMenuItem" Click="AddChannelMember_Click" Visibility="Collapsed"/>
+                <MenuItem Header="{Binding [MiRemoveMember], Source={x:Static local:LocalizationSource.Instance}}" x:Name="ChannelRemoveMemberMenuItem" Click="RemoveChannelMember_Click" Visibility="Collapsed"/>
                 <Separator/>
-                <MenuItem Header="{Binding [MiRefreshChannels], Source={StaticResource Loc}}" Click="RefreshChannels_Click"/>
+                <MenuItem Header="{Binding [MiRefreshChannels], Source={x:Static local:LocalizationSource.Instance}}" Click="RefreshChannels_Click"/>
             </MenuItem>
 
             <!-- Справка -->
-            <MenuItem Header="{Binding [MenuHelp], Source={StaticResource Loc}}">
-                <MenuItem Header="{Binding [MiAbout], Source={StaticResource Loc}}" Click="About_Click"/>
+            <MenuItem Header="{Binding [MenuHelp], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiAbout], Source={x:Static local:LocalizationSource.Instance}}" Click="About_Click"/>
                 <Separator/>
-                <MenuItem Header="{Binding [MiUserGuide], Source={StaticResource Loc}}" Click="HelpGuide_Click"/>
+                <MenuItem Header="{Binding [MiUserGuide], Source={x:Static local:LocalizationSource.Instance}}" Click="HelpGuide_Click"/>
             </MenuItem>
         </Menu>
 
@@ -199,7 +199,7 @@
                                  BorderBrush="{DynamicResource StatusForeground}"
                                  TextChanged="SearchAndAddTextBox_TextChanged"
                                  KeyDown="SearchAndAddTextBox_KeyDown"/>
-                        <TextBlock Text="{Binding [SearchContactHint], Source={StaticResource Loc}}" IsHitTestVisible="False" Margin="8,6,0,0"
+                        <TextBlock Text="{Binding [SearchContactHint], Source={x:Static local:LocalizationSource.Instance}}" IsHitTestVisible="False" Margin="8,6,0,0"
                                    Foreground="{DynamicResource StatusForeground}" FontSize="12">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
@@ -358,7 +358,7 @@
                         <Button Grid.Column="2" Content="➤" Click="SendButton_Click"
                                 Background="#FF1E88E5" Foreground="White" BorderThickness="0"
                                 Width="40" Height="40" FontSize="18" Margin="5"
-                                ToolTip="{Binding [SendTooltip], Source={StaticResource Loc}}"/>
+                                ToolTip="{Binding [SendTooltip], Source={x:Static local:LocalizationSource.Instance}}"/>
                     </Grid>
                 </Border>
             </Grid>

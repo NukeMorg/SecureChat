@@ -11,10 +11,13 @@ namespace SecureChat.Client;
 /// </summary>
 public class LocalizationSource : INotifyPropertyChanged
 {
+    /// <summary>Единственный экземпляр: XAML привязывается через {x:Static ...}, Refresh() уведомляет именно его.</summary>
     public static LocalizationSource Instance { get; } = new();
 
     private static readonly ResourceManager Rm =
         new("SecureChat.Client.Resources.Strings", typeof(LocalizationSource).Assembly);
+
+    private LocalizationSource() { }
 
     public string this[string key] =>
         Rm.GetString(key, CultureInfo.CurrentUICulture) ?? key;
