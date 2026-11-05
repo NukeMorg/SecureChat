@@ -786,6 +786,7 @@ public partial class MainWindow : Window
                     Id = m.MessageId,
                     SenderId = m.SenderId,
                     FilePath = m.FileName ?? "file",
+                    FileSizeText = FormatFileSize(m.FileSize),
                     ContentType = "File",
                     Status = "",
                     IsOutgoing = m.SenderId == _clientId,
@@ -992,6 +993,7 @@ public partial class MainWindow : Window
                 Id = msgId,
                 SenderId = _clientId,
                 FilePath = fileName,
+                FileSizeText = FormatFileSize(fileData.Length),
                 ContentType = "File",
                 Status = "",
                 IsOutgoing = true,
@@ -1045,6 +1047,7 @@ public partial class MainWindow : Window
                 Id = msg.MessageId,
                 SenderId = msg.SenderId,
                 FilePath = path,
+                FileSizeText = FormatFileSize(plain.Length),
                 ContentType = "File",
                 Status = "",
                 IsOutgoing = false,
@@ -1376,6 +1379,13 @@ public partial class MainWindow : Window
         MessagesListBox.ScrollIntoView(msg);
         ChatSearchCount.Text = $"{index + 1}/{_chatSearchMatches.Count}";
     }
+
+    /// <summary>Размер файла: число по CurrentCulture, единицы — из локализованных ресурсов (требование 1.8.3).</summary>
+    private static string FormatFileSize(long bytes) =>
+        FileSizeFormatter.Format(bytes,
+            LocalizationSource.Get("UnitBytes"),
+            LocalizationSource.Get("UnitKilobytes"),
+            LocalizationSource.Get("UnitMegabytes"));
 
     // ---------- Экспорт текущего чата (Лаба 3, только клиент) ----------
 
@@ -1742,6 +1752,7 @@ public partial class MainWindow : Window
                         SenderId = hm.SenderId,
                         ReceiverId = hm.ReceiverId,
                         FilePath = hm.FileName ?? "file",
+                        FileSizeText = FormatFileSize(hm.FileSize),
                         ContentType = "File",
                         Status = MapStatusGlyph(hm.Status),
                         IsOutgoing = hm.SenderId == _clientId,
@@ -1905,6 +1916,7 @@ public partial class MainWindow : Window
                                     SenderId = senderId,
                                     ReceiverId = _clientId,
                                     FilePath = path,
+                                    FileSizeText = FormatFileSize(plain.Length),
                                     ContentType = "File",
                                     Status = "✓✓",
                                     IsOutgoing = false,
@@ -2144,6 +2156,7 @@ public partial class MainWindow : Window
                     SenderId = _clientId,
                     ReceiverId = _currentContactId,
                     FilePath = Path.GetFileName(dlg.FileName),
+                    FileSizeText = FormatFileSize(new FileInfo(dlg.FileName).Length),
                     ContentType = "File",
                     Status = "Отправка...",
                     IsOutgoing = true,

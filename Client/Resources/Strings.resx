@@ -71,4 +71,7 @@
   <data name="Info" xml:space="preserve"><value>Информация</value></data>
   <data name="Export" xml:space="preserve"><value>Экспорт</value></data>
   <data name="Done" xml:space="preserve"><value>Готово</value></data>
+  <data name="UnitBytes" xml:space="preserve"><value>Б</value></data>
+  <data name="UnitKilobytes" xml:space="preserve"><value>КБ</value></data>
+  <data name="UnitMegabytes" xml:space="preserve"><value>МБ</value></data>
 </root>

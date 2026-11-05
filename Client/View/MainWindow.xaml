@@ -302,6 +302,10 @@
                                                 <TextBlock Text="📎 " Foreground="{DynamicResource MessageTextForeground}"/>
                                                 <TextBlock Text="{Binding FilePath, Converter={StaticResource FileNameConverter}}" 
                                                            Foreground="{DynamicResource FilePathForeground}" FontSize="13"/>
+                                                <TextBlock Text="{Binding FileSizeText}" FontSize="11" Margin="6,0,0,0"
+                                                           VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource StatusForeground}"
+                                                           Visibility="{Binding HasFileSize, Converter={StaticResource BoolToVisibilityConverter}}"/>
                                             </StackPanel>
                                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
                                                 <TextBlock Text="{Binding Timestamp, StringFormat={}{0:HH:mm}}" FontSize="10"

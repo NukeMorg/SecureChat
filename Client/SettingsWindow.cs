@@ -14,7 +14,7 @@ public class SettingsWindow : Window
 {
     private readonly ComboBox _language = new()
     {
-        ItemsSource = new[] { "Русский", "English" },
+        ItemsSource = new[] { "Русский (ru-RU)", "English (en-US)" },
         Height = 26
     };
 
@@ -34,7 +34,7 @@ public class SettingsWindow : Window
         Background = ((App)Application.Current).MainWindow?.Background ?? SystemColors.WindowBrush;
         Foreground = ((App)Application.Current).MainWindow?.Foreground ?? SystemColors.ControlTextBrush;
 
-        _language.SelectedIndex = App.CurrentLanguage == "en" ? 1 : 0;
+        _language.SelectedIndex = App.CurrentLocale == "en-US" ? 1 : 0;
         _theme.SelectedIndex = App.CurrentTheme == "Light" ? 1 : 0;
 
         var ok = new Button { Content = "OK", Width = 90, Height = 26, Margin = new Thickness(0, 16, 8, 0) };
@@ -74,7 +74,7 @@ public class SettingsWindow : Window
 
     private void Save()
     {
-        string lang = _language.SelectedIndex == 1 ? "en" : "ru";
+        string lang = _language.SelectedIndex == 1 ? "en-US" : "ru-RU";
         if (lang != App.CurrentLanguage) App.ApplyLanguage(lang);
 
         string theme = _theme.SelectedIndex == 1 ? "Light" : "Dark";

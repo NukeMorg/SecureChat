@@ -18,7 +18,8 @@ namespace SecureChat.Client;
 public partial class App : Application
 {
     public static string CurrentTheme { get; set; } = "Dark";
-    public static string CurrentLanguage { get; set; } = "ru";
+    /// <summary>Текущая локаль в полном формате BCP-47/ISO: "ru-RU" | "en-US" (требование 1.8.1).</summary>
+    public static string CurrentLocale { get; set; } = "ru-RU";
     public static NetworkService Network { get; } = new();
 
     protected override void OnStartup(StartupEventArgs e)
@@ -101,27 +102,41 @@ public partial class App : Application
 
     // ---------- Локализация (Лаба 8) ----------
 
-    /// <summary>Смена языка на лету: культуры потока + обновление всех Loc-привязок.</summary>
+    /// <summary>
+    /// Смена локали на лету: принимается полный код ("ru-RU", "en-US") или короткий ("ru", "en").
+    /// CurrentCulture — формат дат/чисел; CurrentUICulture — выбор строк ресурсов.
+    /// </summary>
     public static void ApplyLanguage(string language)
     {
-        if (language != "ru" && language != "en") language = "ru";
-        CurrentLanguage = language;
+        string locale = NormalizeLocale(language);
+        CurrentLocale = locale;
 
-        var culture = new CultureInfo(language);
+        var culture = new CultureInfo(locale);
         CultureInfo.DefaultThreadCurrentCulture = culture;
         CultureInfo.DefaultThreadCurrentUICulture = culture;
         Thread.CurrentThread.CurrentCulture = culture;
         Thread.CurrentThread.CurrentUICulture = culture;
 
         LocalizationSource.Instance.Refresh();
-        PersistLanguage(language);
-        Log.Information("Language switched to {Language}", language);
+        PersistLanguage(locale);
+        Log.Information("Locale switched to {Locale}", locale);
+    }
+
+    /// <summary>Короткий код → полная локаль (язык + регион, ISO 639 + ISO 3166).</summary>
+    public static string NormalizeLocale(string language)
+    {
+        switch (language)
+        {
+            case "ru": case "ru-RU": case "ru_RU": return "ru-RU";
+            case "en": case "en-US": case "en_US": return "en-US";
+            default: return "ru-RU";
+        }
     }
 
     private static void ApplyLanguageFromConfig()
     {
         string saved = ReadLanguageFromConfig();
-        CurrentLanguage = saved;
+        CurrentLocale = saved;
         var culture = new CultureInfo(saved);
         CultureInfo.DefaultThreadCurrentCulture = culture;
         CultureInfo.DefaultThreadCurrentUICulture = culture;
@@ -139,16 +154,17 @@ public partial class App : Application
             if (File.Exists(path))
             {
                 var cfg = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path));
-                if (cfg != null && cfg.TryGetValue("Language", out var lang) && (lang == "ru" || lang == "en"))
-                    return lang;
+                if (cfg != null && cfg.TryGetValue("Language", out var lang))
+                    return NormalizeLocale(lang); // совместимость со старыми "ru"/"en"
             }
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "Failed to read language preference");
         }
-        // по умолчанию — язык системы
-        return CultureInfo.InstalledUICulture.TwoLetterISOLanguageName == "ru" ? "ru" : "en";
+        // по умолчанию — локаль системы
+        var os = CultureInfo.InstalledUICulture;
+        return os.TwoLetterISOLanguageName == "ru" ? "ru-RU" : "en-US";
     }
 
     private static void PersistLanguage(string language)
