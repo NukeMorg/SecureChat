@@ -75,7 +75,7 @@ public class SettingsWindow : Window
     private void Save()
     {
         string lang = _language.SelectedIndex == 1 ? "en-US" : "ru-RU";
-        if (lang != App.CurrentLanguage) App.ApplyLanguage(lang);
+        if (lang != App.CurrentLocale) App.ApplyLanguage(lang);
 
         string theme = _theme.SelectedIndex == 1 ? "Light" : "Dark";
         if (theme != App.CurrentTheme) App.ApplyTheme(theme);

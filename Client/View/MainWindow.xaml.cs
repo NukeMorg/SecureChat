@@ -1916,7 +1916,7 @@ public partial class MainWindow : Window
                                     SenderId = senderId,
                                     ReceiverId = _clientId,
                                     FilePath = path,
-                                    FileSizeText = FormatFileSize(plain.Length),
+                                    FileSizeText = FormatFileSize(new FileInfo(path).Length),
                                     ContentType = "File",
                                     Status = "✓✓",
                                     IsOutgoing = false,
