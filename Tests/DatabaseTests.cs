@@ -153,33 +153,33 @@ public class DatabaseTests : IDisposable
     {
         _db.SaveVerificationCode("code@test.local", "123456", TimeSpan.FromMinutes(10));
 
-        Assert.Equal(Database.CodeVerifyResult.Valid, _db.VerifyAndConsumeCode("code@test.local", "123456"));
-        Assert.Equal(Database.CodeVerifyResult.Invalid, _db.VerifyAndConsumeCode("code@test.local", "123456"));
+        Assert.Equal(CodeVerifyResult.Valid, _db.VerifyAndConsumeCode("code@test.local", "123456"));
+        Assert.Equal(CodeVerifyResult.Invalid, _db.VerifyAndConsumeCode("code@test.local", "123456"));
     }
 
     [Fact]
     public void VerifyAndConsumeCode_WrongCode_ReturnsInvalid()
     {
         _db.SaveVerificationCode("wrong@test.local", "111111", TimeSpan.FromMinutes(10));
-        Assert.Equal(Database.CodeVerifyResult.Invalid, _db.VerifyAndConsumeCode("wrong@test.local", "222222"));
+        Assert.Equal(CodeVerifyResult.Invalid, _db.VerifyAndConsumeCode("wrong@test.local", "222222"));
     }
 
     [Fact]
     public void VerifyAndConsumeCode_UnknownEmail_ReturnsInvalid() =>
-        Assert.Equal(Database.CodeVerifyResult.Invalid, _db.VerifyAndConsumeCode("nocode@test.local", "123456"));
+        Assert.Equal(CodeVerifyResult.Invalid, _db.VerifyAndConsumeCode("nocode@test.local", "123456"));
 
     [Fact]
     public void VerifyAndConsumeCode_ExpiredTtl_ReturnsExpired()
     {
         _db.SaveVerificationCode("expired@test.local", "333333", TimeSpan.FromMinutes(-1));
-        Assert.Equal(Database.CodeVerifyResult.Expired, _db.VerifyAndConsumeCode("expired@test.local", "333333"));
+        Assert.Equal(CodeVerifyResult.Expired, _db.VerifyAndConsumeCode("expired@test.local", "333333"));
     }
 
     [Fact]
     public void VerifyAndConsumeCode_EmailNormalization_TrimsAndLowercases()
     {
         _db.SaveVerificationCode("  Norm@Test.Local  ", "444444", TimeSpan.FromMinutes(10));
-        Assert.Equal(Database.CodeVerifyResult.Valid, _db.VerifyAndConsumeCode("norm@test.local", " 444444 "));
+        Assert.Equal(CodeVerifyResult.Valid, _db.VerifyAndConsumeCode("norm@test.local", " 444444 "));
     }
 
     // ---------- Брутфорс и лимит писем ----------

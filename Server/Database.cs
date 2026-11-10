@@ -10,7 +10,7 @@ using ILogger = Serilog.ILogger;
 
 namespace SecureChat.Server;
 
-public class Database
+public class Database : IDatabase
 {
     private readonly string cs;
     public string ConnectionString => cs;
@@ -284,8 +284,6 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    public enum CodeVerifyResult { Valid, Invalid, Expired }
-
     public CodeVerifyResult VerifyAndConsumeCode(string email, string code)
     {
         string normEmail = email.Trim().ToLowerInvariant();
@@ -387,7 +385,7 @@ public class Database
         return insertCmd.ExecuteNonQuery() > 0;
     }
 
-    public static (string hash, string salt) HashPassword(string password)
+    private static (string hash, string salt) HashPassword(string password)
     {
         // Новые хэши — BCrypt; соль хранится внутри строки хэша.
         return (PasswordHasher.Hash(password), string.Empty);

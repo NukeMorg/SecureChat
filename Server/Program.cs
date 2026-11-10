@@ -1,4 +1,5 @@
 using SecureChat.Server;
+using SecureChat.Server.Auth;
 using Serilog;
 
 namespace SecureChat.Server;
@@ -16,9 +17,11 @@ public class Program
             cfg.ReadFrom.Configuration(context.Configuration)
                .Enrich.FromLogContext());
 
+        builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
+
         builder.Services.AddSingleton<ConnectionRegistry>();
-        builder.Services.AddSingleton<Database>();
-        builder.Services.AddSingleton<EmailService>();
+        builder.Services.AddSingleton<IDatabase, Database>();
+        builder.Services.AddSingleton<IEmailService, EmailService>();
 
         builder.Services.AddSignalR(options =>
         {
@@ -36,7 +39,7 @@ public class Program
         app.MapGet("/", () => "SecureChat Server is Running");
 
         Log.Information("=== SecureChat Server started on {Machine} ===", Environment.MachineName);
-        app.Services.GetRequiredService<Database>().Initialize();
+        app.Services.GetRequiredService<IDatabase>().Initialize();
 
         try
         {

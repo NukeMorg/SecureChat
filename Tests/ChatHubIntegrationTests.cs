@@ -17,9 +17,9 @@ namespace SecureChat.Tests;
 public class ChatHubIntegrationTests : IAsyncLifetime
 {
     private TempDbDirectory _tempDir = null!;
-    private Database _db = null!;
+    private IDatabase _db = null!;
     private ConnectionRegistry _registry = null!;
-    private EmailService _email = null!;
+    private IEmailService _email = null!;
     private WebApplication _app = null!;
     private string _serverUrl = null!;
     private string _hubUrl = null!;
@@ -31,14 +31,12 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         _db.Initialize();
 
         _registry = new ConnectionRegistry();
-        _email = new EmailService(new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Smtp:UseRealSmtp"] = "false",
-                ["Smtp:SenderEmail"] = "",
-                ["Smtp:SenderPassword"] = ""
-            })
-            .Build());
+        _email = new EmailService(Microsoft.Extensions.Options.Options.Create(new SecureChat.Server.Auth.SmtpOptions
+        {
+            UseRealSmtp = false,
+            SenderEmail = "",
+            SenderPassword = ""
+        }));
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseKestrel();

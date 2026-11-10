@@ -1,31 +1,24 @@
-using SecureChat.Security;
-﻿using System;
+using System;
 using System.Net;
 using System.Net.Mail;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
+using SecureChat.Server.Auth;
+using SecureChat.Security;
 using Serilog;
 using ILogger = Serilog.ILogger;
 
 namespace SecureChat.Server;
 
-public class EmailService
+/// <summary>Отправка кодов подтверждения: реальный SMTP или dev-режим (код печатается в лог).</summary>
+public class EmailService : IEmailService
 {
-    private readonly string _smtpHost = "smtp.gmail.com";
-    private readonly int _smtpPort = 587;
-    private readonly string _senderEmail;
-    private readonly string _senderPassword;
-    private readonly bool _useRealSmtp;
+    private readonly SmtpOptions _options;
 
     private static readonly ILogger Log = Serilog.Log.ForContext<EmailService>();
 
-    public EmailService(IConfiguration configuration)
-    {
-        _senderEmail = configuration["Smtp:SenderEmail"] ?? "";
-        _senderPassword = configuration["Smtp:SenderPassword"] ?? "";
-        _useRealSmtp = bool.TryParse(configuration["Smtp:UseRealSmtp"], out var b) ? b : false;
-    }
+    public EmailService(IOptions<SmtpOptions> options) => _options = options.Value;
 
     public string GenerateVerificationCode()
     {
@@ -36,7 +29,7 @@ public class EmailService
     public async Task<bool> SendVerificationCodeAsync(string toEmail, string code)
     {
         // ВАЖНО: код — это 2FA-credential. Логируем ТОЛЬКО в dev-режиме.
-        if (!_useRealSmtp || string.IsNullOrWhiteSpace(_senderEmail) || string.IsNullOrWhiteSpace(_senderPassword))
+        if (!_options.UseRealSmtp || string.IsNullOrWhiteSpace(_options.SenderEmail) || string.IsNullOrWhiteSpace(_options.SenderPassword))
         {
             Log.Warning("[DEV MODE] Verification code for {MaskedEmail}: {Code}. SMTP disabled.",
                 PiiMasker.Email(toEmail), code);
@@ -45,16 +38,16 @@ public class EmailService
 
         try
         {
-            using var client = new SmtpClient(_smtpHost, _smtpPort)
+            using var client = new SmtpClient(_options.Host, _options.Port)
             {
-                Credentials = new NetworkCredential(_senderEmail, _senderPassword),
+                Credentials = new NetworkCredential(_options.SenderEmail, _options.SenderPassword),
                 EnableSsl = true,
                 Timeout = 10000
             };
 
             var mail = new MailMessage
             {
-                From = new MailAddress(_senderEmail, "SecureChat Enterprise"),
+                From = new MailAddress(_options.SenderEmail, "SecureChat Enterprise"),
                 Subject = "Код подтверждения SecureChat",
                 Body = $"Здравствуйте!\n\nВаш проверочный код для SecureChat: {code}\nКод действителен 10 минут.",
                 IsBodyHtml = false

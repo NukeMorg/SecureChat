@@ -15,12 +15,12 @@ namespace SecureChat.Server;
 /// </summary>
 public class ChatHub : Hub
 {
-    private readonly Database _db;
-    private readonly EmailService _email;
+    private readonly IDatabase _db;
+    private readonly IEmailService _email;
     private readonly ConnectionRegistry _registry;
     private readonly ILogger _log = Serilog.Log.ForContext<ChatHub>();
 
-    public ChatHub(Database db, EmailService email, ConnectionRegistry registry)
+    public ChatHub(IDatabase db, IEmailService email, ConnectionRegistry registry)
     {
         _db = db;
         _email = email;
@@ -162,13 +162,13 @@ public class ChatHub : Hub
         _log.Information("Registration request for {MaskedEmail}", PiiMasker.Email(p.Email));
 
         var verifyResult = _db.VerifyAndConsumeCode(p.Email, p.Code);
-        if (verifyResult == Database.CodeVerifyResult.Invalid)
+        if (verifyResult == CodeVerifyResult.Invalid)
         {
             _log.Warning("Invalid verification code for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "InvalidCode" });
             return;
         }
-        if (verifyResult == Database.CodeVerifyResult.Expired)
+        if (verifyResult == CodeVerifyResult.Expired)
         {
             _log.Warning("Verification code expired for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "CodeExpired" });
