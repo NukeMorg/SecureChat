@@ -18,10 +18,12 @@ public class Program
                .Enrich.FromLogContext());
 
         builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
+        builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 
         builder.Services.AddSingleton<ConnectionRegistry>();
         builder.Services.AddSingleton<IDatabase, Database>();
         builder.Services.AddSingleton<IEmailService, EmailService>();
+        builder.Services.AddSingleton<IJwtTokenService, JwtTokenService>();
 
         builder.Services.AddSignalR(options =>
         {

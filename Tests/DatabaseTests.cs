@@ -24,8 +24,9 @@ public class DatabaseTests : IDisposable
 
     public void Dispose() => _tempDir.Dispose();
 
-    private (int id, string token) RegisterTestUser(string email, string password = "Passw0rd!x", string name = "User") =>
-        _db.RegisterUser(email, password, name, "-----BEGIN PUBLIC KEY-----TEST-----END PUBLIC KEY-----").GetValueOrDefault();
+    private int RegisterTestUser(string email, string password = "Passw0rd!x", string name = "User") =>
+        _db.RegisterUser(email, password, name, "-----BEGIN PUBLIC KEY-----TEST-----END PUBLIC KEY-----")
+        ?? throw new InvalidOperationException($"RegisterUser failed for {email}");
 
     // ---------- Схема и инициализация ----------
 
@@ -36,7 +37,7 @@ public class DatabaseTests : IDisposable
         conn.Open();
 
         long version = (long)new SqliteCommand("PRAGMA user_version;", conn).ExecuteScalar()!;
-        Assert.Equal(3, version);
+        Assert.Equal(4, version);
 
         var tables = new HashSet<string>();
         using (var cmd = new SqliteCommand("SELECT name FROM sqlite_master WHERE type='table';", conn))
@@ -53,16 +54,15 @@ public class DatabaseTests : IDisposable
     // ---------- Регистрация и аутентификация ----------
 
     [Fact]
-    public void RegisterUser_AssignsSequentialIdAndToken()
+    public void RegisterUser_AssignsSequentialIds()
     {
-        var user1 = _db.RegisterUser("reg1@test.local", "Passw0rd!x", "Alice", "PUBKEY1");
-        var user2 = _db.RegisterUser("reg2@test.local", "Passw0rd!x", "Bob", "PUBKEY2");
+        int user1 = _db.RegisterUser("reg1@test.local", "Passw0rd!x", "Alice", "PUBKEY1")
+            ?? throw new InvalidOperationException("RegisterUser failed");
+        int user2 = _db.RegisterUser("reg2@test.local", "Passw0rd!x", "Bob", "PUBKEY2")
+            ?? throw new InvalidOperationException("RegisterUser failed");
 
-        Assert.NotNull(user1);
-        Assert.NotNull(user2);
-        Assert.NotEqual(user1!.Value.id, user2!.Value.id);
-        Assert.False(string.IsNullOrEmpty(user1.Value.token));
-        Assert.NotEqual(user1.Value.token, user2.Value.token);
+        Assert.NotEqual(user1, user2);
+        Assert.Equal(user1 + 1, user2); // последовательные идентификаторы
     }
 
     [Fact]
@@ -73,16 +73,15 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void Authenticate_CorrectCredentials_ReturnsUserAndNewToken()
+    public void Authenticate_CorrectCredentials_ReturnsUserAndName()
     {
-        var registered = RegisterTestUser("auth@test.local", "Passw0rd!x", "Alice");
+        int registered = RegisterTestUser("auth@test.local", "Passw0rd!x", "Alice");
 
         var auth = _db.Authenticate("auth@test.local", "Passw0rd!x");
 
         Assert.NotNull(auth);
-        Assert.Equal(registered.id, auth!.Value.id);
+        Assert.Equal(registered, auth!.Value.id);
         Assert.Equal("Alice", auth.Value.name);
-        Assert.False(string.IsNullOrEmpty(auth.Value.token));
     }
 
     [Fact]
@@ -105,45 +104,59 @@ public class DatabaseTests : IDisposable
 
     [Fact]
     public void RegisterUser_DefaultRoleIsEmployee() =>
-        Assert.Equal("Employee", _db.GetUserRole(RegisterTestUser("role@test.local").id));
+        Assert.Equal("Employee", _db.GetUserRole(RegisterTestUser("role@test.local")));
 
-    // ---------- Сессии ----------
+    // ---------- Сессии (строки по jti; JWT-обёртка тестируется в JwtTokenServiceTests) ----------
 
     [Fact]
     public void CreateSession_ValidateSession_RoundTrip()
     {
-        int userId = RegisterTestUser("sess@test.local").id;
-        string token = _db.CreateSession(userId);
+        int userId = RegisterTestUser("sess@test.local");
+        string jti = Guid.NewGuid().ToString("N");
+        _db.CreateSession(userId, jti, DateTime.UtcNow.AddDays(7));
 
-        Assert.Equal(userId, _db.ValidateSession(token));
+        Assert.Equal(userId, _db.ValidateSession(jti));
     }
 
     [Fact]
-    public void ValidateSession_UnknownToken_ReturnsNull() =>
-        Assert.Null(_db.ValidateSession("no-such-token"));
+    public void ValidateSession_UnknownJti_ReturnsNull() =>
+        Assert.Null(_db.ValidateSession("no-such-jti"));
 
     [Fact]
-    public void RevokeSession_TokenBecomesInvalid()
+    public void ValidateSession_ExpiredSession_ReturnsNull()
     {
-        int userId = RegisterTestUser("revoke@test.local").id;
-        string token = _db.CreateSession(userId);
+        int userId = RegisterTestUser("expired-sess@test.local");
+        string jti = Guid.NewGuid().ToString("N");
+        _db.CreateSession(userId, jti, DateTime.UtcNow.AddMinutes(-1));
 
-        _db.RevokeSession(token);
-
-        Assert.Null(_db.ValidateSession(token));
+        Assert.Null(_db.ValidateSession(jti));
     }
 
     [Fact]
-    public void RevokeAllUserSessions_AllTokensInvalid()
+    public void RevokeSession_SessionBecomesInvalid()
     {
-        int userId = RegisterTestUser("revokeall@test.local").id;
-        string token1 = _db.CreateSession(userId);
-        string token2 = _db.CreateSession(userId);
+        int userId = RegisterTestUser("revoke@test.local");
+        string jti = Guid.NewGuid().ToString("N");
+        _db.CreateSession(userId, jti, DateTime.UtcNow.AddDays(7));
+
+        _db.RevokeSession(jti);
+
+        Assert.Null(_db.ValidateSession(jti));
+    }
+
+    [Fact]
+    public void RevokeAllUserSessions_AllSessionsInvalid()
+    {
+        int userId = RegisterTestUser("revokeall@test.local");
+        string jti1 = Guid.NewGuid().ToString("N");
+        string jti2 = Guid.NewGuid().ToString("N");
+        _db.CreateSession(userId, jti1, DateTime.UtcNow.AddDays(7));
+        _db.CreateSession(userId, jti2, DateTime.UtcNow.AddDays(7));
 
         _db.RevokeAllUserSessions(userId);
 
-        Assert.Null(_db.ValidateSession(token1));
-        Assert.Null(_db.ValidateSession(token2));
+        Assert.Null(_db.ValidateSession(jti1));
+        Assert.Null(_db.ValidateSession(jti2));
     }
 
     // ---------- Коды подтверждения email ----------
@@ -237,7 +250,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void SetUserRole_GetUserRole_RoundTrip()
     {
-        int userId = RegisterTestUser("setrole@test.local").id;
+        int userId = RegisterTestUser("setrole@test.local");
         _db.SetUserRole(userId, "Manager");
         Assert.Equal("Manager", _db.GetUserRole(userId));
     }
@@ -245,7 +258,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void SetUserActive_BanAndUnban()
     {
-        int userId = RegisterTestUser("ban@test.local").id;
+        int userId = RegisterTestUser("ban@test.local");
 
         _db.SetUserActive(userId, false);
         Assert.False(_db.IsUserActive(userId));
@@ -257,7 +270,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void SetUserStatus_GetUserStatus_RoundTrip()
     {
-        int userId = RegisterTestUser("status@test.local").id;
+        int userId = RegisterTestUser("status@test.local");
         _db.SetUserStatus(userId, "В отпуске");
         Assert.Equal("В отпуске", _db.GetUserStatus(userId));
     }
@@ -265,7 +278,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void SetAvatarPath_GetAvatarPath_RoundTrip()
     {
-        int userId = RegisterTestUser("avatar@test.local").id;
+        int userId = RegisterTestUser("avatar@test.local");
         Assert.Null(_db.GetAvatarPath(userId));
 
         _db.SetAvatarPath(userId, "avatars/42.png");
@@ -281,7 +294,7 @@ public class DatabaseTests : IDisposable
         var registered = _db.RegisterUser("verify@test.local", "Passw0rd!x", "Alice", "PK");
         Assert.NotNull(registered);
 
-        bool ok = _db.VerifyPasswordForUser(registered!.Value.id, "Passw0rd!x", out string? upgradeHash);
+        bool ok = _db.VerifyPasswordForUser(registered!.Value, "Passw0rd!x", out string? upgradeHash);
 
         Assert.True(ok);
         Assert.Null(upgradeHash); // BCrypt-хэш не требует апгрейда
@@ -289,12 +302,12 @@ public class DatabaseTests : IDisposable
 
     [Fact]
     public void VerifyPasswordForUser_WrongPassword_ReturnsFalse() =>
-        Assert.False(_db.VerifyPasswordForUser(RegisterTestUser("verify2@test.local").id, "bad", out _));
+        Assert.False(_db.VerifyPasswordForUser(RegisterTestUser("verify2@test.local"), "bad", out _));
 
     [Fact]
     public void UpdatePassword_NewPasswordAuthenticates()
     {
-        int userId = RegisterTestUser("updpass@test.local").id;
+        int userId = RegisterTestUser("updpass@test.local");
         _db.UpdatePassword(userId, "NewPassw0rd!9");
 
         Assert.Null(_db.Authenticate("updpass@test.local", "Passw0rd!x"));
@@ -305,16 +318,16 @@ public class DatabaseTests : IDisposable
     public void UserExists_And_PublicKey()
     {
         var user = RegisterTestUser("exists@test.local");
-        Assert.True(_db.UserExists(user.id));
+        Assert.True(_db.UserExists(user));
         Assert.False(_db.UserExists(999999));
-        Assert.NotNull(_db.GetPublicKey(user.id));
+        Assert.NotNull(_db.GetPublicKey(user));
         Assert.Null(_db.GetPublicKey(999999));
     }
 
     [Fact]
     public void UpdateUserName_GetUserName_RoundTrip()
     {
-        int userId = RegisterTestUser("username@test.local", name: "Original").id;
+        int userId = RegisterTestUser("username@test.local", name: "Original");
         _db.UpdateUserName(userId, "Renamed");
         Assert.Equal("Renamed", _db.GetUserName(userId));
     }
@@ -324,8 +337,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void AddContact_CreatesBidirectionalLinkWithoutDuplicates()
     {
-        int alice = RegisterTestUser("alice@test.local").id;
-        int bob = RegisterTestUser("bob@test.local").id;
+        int alice = RegisterTestUser("alice@test.local");
+        int bob = RegisterTestUser("bob@test.local");
 
         _db.AddContact(alice, bob);
         _db.AddContact(alice, bob); // повторная попытка не должна дублировать
@@ -344,8 +357,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void GetMessageInfo_ReturnsRoutingMetadata()
     {
-        int alice = RegisterTestUser("msgmeta@test.local").id;
-        int bob = RegisterTestUser("msgmeta2@test.local").id;
+        int alice = RegisterTestUser("msgmeta@test.local");
+        int bob = RegisterTestUser("msgmeta2@test.local");
         SaveTextMessage("m-meta-1", alice, bob);
 
         var info = _db.GetMessageInfo("m-meta-1");
@@ -364,8 +377,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void UpdateMessageStatus_ChangesStatus()
     {
-        int alice = RegisterTestUser("msgstatus@test.local").id;
-        int bob = RegisterTestUser("msgstatus2@test.local").id;
+        int alice = RegisterTestUser("msgstatus@test.local");
+        int bob = RegisterTestUser("msgstatus2@test.local");
         SaveTextMessage("m-status-1", alice, bob);
 
         _db.UpdateMessageStatus("m-status-1", "Delivered");
@@ -377,8 +390,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void UpdateMessageContent_MarksMessageEdited()
     {
-        int alice = RegisterTestUser("msgedit@test.local").id;
-        int bob = RegisterTestUser("msgedit2@test.local").id;
+        int alice = RegisterTestUser("msgedit@test.local");
+        int bob = RegisterTestUser("msgedit2@test.local");
         SaveTextMessage("m-edit-1", alice, bob);
 
         _db.UpdateMessageContent("m-edit-1", "newNonce", "newCiphertext", "newTag");
@@ -394,8 +407,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void SoftDeleteMessage_MarksDeletedButKeepsRow()
     {
-        int alice = RegisterTestUser("msgdel@test.local").id;
-        int bob = RegisterTestUser("msgdel2@test.local").id;
+        int alice = RegisterTestUser("msgdel@test.local");
+        int bob = RegisterTestUser("msgdel2@test.local");
         SaveTextMessage("m-del-1", alice, bob);
 
         _db.SoftDeleteMessage("m-del-1");
@@ -409,8 +422,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void GetHistoryPage_ReturnsMessagesInChronologicalOrder()
     {
-        int alice = RegisterTestUser("hist@test.local").id;
-        int bob = RegisterTestUser("hist2@test.local").id;
+        int alice = RegisterTestUser("hist@test.local");
+        int bob = RegisterTestUser("hist2@test.local");
 
         for (int i = 1; i <= 5; i++)
         {
@@ -429,8 +442,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void GetHistoryPage_PagingWithBeforeCursorAndHasMore()
     {
-        int alice = RegisterTestUser("page@test.local").id;
-        int bob = RegisterTestUser("page2@test.local").id;
+        int alice = RegisterTestUser("page@test.local");
+        int bob = RegisterTestUser("page2@test.local");
 
         for (int i = 1; i <= 5; i++)
         {
@@ -451,9 +464,9 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void GetHistoryPage_DoesNotLeakOtherDialogs()
     {
-        int alice = RegisterTestUser("leak@test.local").id;
-        int bob = RegisterTestUser("leak2@test.local").id;
-        int carol = RegisterTestUser("leak3@test.local").id;
+        int alice = RegisterTestUser("leak@test.local");
+        int bob = RegisterTestUser("leak2@test.local");
+        int carol = RegisterTestUser("leak3@test.local");
 
         SaveTextMessage("m-leak-ab", alice, bob);
         SaveTextMessage("m-leak-ac", alice, carol);
@@ -465,8 +478,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void GetPendingMessages_ReturnsOnlyUnacknowledgedSentMessages()
     {
-        int alice = RegisterTestUser("pending@test.local").id;
-        int bob = RegisterTestUser("pending2@test.local").id;
+        int alice = RegisterTestUser("pending@test.local");
+        int bob = RegisterTestUser("pending2@test.local");
 
         SaveTextMessage("m-pending-1", alice, bob, status: "Sent");
         SaveTextMessage("m-pending-2", alice, bob, status: "Delivered"); // уже доставлено — не должно попасть
@@ -483,7 +496,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void CreateChannel_AssignsIdAndOwnerMembership()
     {
-        int ownerId = RegisterTestUser("chowner@test.local").id;
+        int ownerId = RegisterTestUser("chowner@test.local");
 
         string? channelId = _db.CreateChannel("Проект Феникс", ownerId);
 
@@ -497,7 +510,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void CreateChannel_DuplicateName_ReturnsNull()
     {
-        int ownerId = RegisterTestUser("chdup@test.local").id;
+        int ownerId = RegisterTestUser("chdup@test.local");
 
         string? first = _db.CreateChannel("Уникальный канал", ownerId);
         string? second = _db.CreateChannel("Уникальный канал", ownerId);
@@ -509,8 +522,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void ChannelMembers_AddRemoveAndRoles()
     {
-        int owner = RegisterTestUser("chm-owner@test.local").id;
-        int member = RegisterTestUser("chm-member@test.local").id;
+        int owner = RegisterTestUser("chm-owner@test.local");
+        int member = RegisterTestUser("chm-member@test.local");
         string channelId = _db.CreateChannel("Канал участников", owner)!;
 
         _db.AddChannelMemberToChannel(channelId, member);
@@ -528,9 +541,9 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void GetUserChannels_ReturnsOnlyChannelsUserBelongsTo()
     {
-        int owner = RegisterTestUser("guc-owner@test.local").id;
-        int outsider = RegisterTestUser("guc-outsider@test.local").id;
-        int member = RegisterTestUser("guc-member@test.local").id;
+        int owner = RegisterTestUser("guc-owner@test.local");
+        int outsider = RegisterTestUser("guc-outsider@test.local");
+        int member = RegisterTestUser("guc-member@test.local");
         string channelId = _db.CreateChannel("Список каналов", owner)!;
         _db.AddChannelMemberToChannel(channelId, member);
 
@@ -548,7 +561,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void ChannelKeys_SaveGetAndUpdate()
     {
-        int ownerId = RegisterTestUser("ckey@test.local").id;
+        int ownerId = RegisterTestUser("ckey@test.local");
         string channelId = _db.CreateChannel("Канал ключей", ownerId)!;
 
         Assert.Null(_db.GetChannelKey(channelId, ownerId));
@@ -564,8 +577,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void ChannelMessages_HistoryPagingAndIsolation()
     {
-        int owner = RegisterTestUser("chmsg-owner@test.local").id;
-        int member = RegisterTestUser("chmsg-member@test.local").id;
+        int owner = RegisterTestUser("chmsg-owner@test.local");
+        int member = RegisterTestUser("chmsg-member@test.local");
         string channelId = _db.CreateChannel("Канал сообщений", owner)!;
         _db.AddChannelMemberToChannel(channelId, member);
 
@@ -597,8 +610,8 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void DeleteUserFromAllChannels_RemovesMembershipAndListsAffected()
     {
-        int owner = RegisterTestUser("dall-owner@test.local").id;
-        int member = RegisterTestUser("dall-member@test.local").id;
+        int owner = RegisterTestUser("dall-owner@test.local");
+        int member = RegisterTestUser("dall-member@test.local");
         string ch1 = _db.CreateChannel("Канал А", owner)!;
         string ch2 = _db.CreateChannel("Канал Б", owner)!;
         _db.AddChannelMemberToChannel(ch1, member);
@@ -617,7 +630,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void WriteAudit_GetAuditLog_RoundTrip()
     {
-        int userId = RegisterTestUser("audit@test.local").id;
+        int userId = RegisterTestUser("audit@test.local");
 
         _db.WriteAudit(userId, "CreateChannel", targetId: null, result: "Ok", ip: "127.0.0.1", userAgent: "test-agent");
         _db.WriteAudit(null, "FailedLogin", targetId: null, result: "InvalidCredentials", ip: "10.1.1.1");

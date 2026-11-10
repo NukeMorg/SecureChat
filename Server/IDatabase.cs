@@ -26,13 +26,17 @@ public interface IDatabase
     bool TryReserveEmailSend(string email, TimeSpan window, int maxAttempts);
 
     // ---------- Учётные записи ----------
-    (int id, string token)? RegisterUser(string email, string password, string userName, string publicKey);
-    (int id, string name, string token)? Authenticate(string email, string password);
+    /// <summary>Создаёт пользователя; null — почта занята. Сессию создаёт ChatHub через JWT.</summary>
+    int? RegisterUser(string email, string password, string userName, string publicKey);
+    /// <summary>Проверка пароля (с миграцией хэша); токен сессии выпускает ChatHub.</summary>
+    (int id, string name)? Authenticate(string email, string password);
 
-    // ---------- Сессии ----------
-    string CreateSession(int userId);
-    int? ValidateSession(string token);
-    void RevokeSession(string token);
+    // ---------- Сессии (строки в Sessions; JWT-обёртка — IJwtTokenService) ----------
+    /// <summary>Сохраняет строку сессии по jti из выпущенного JWT.</summary>
+    void CreateSession(int userId, string jti, DateTime expiresAtUtc);
+    /// <summary>Проверка строки сессии по jti: не истекла, не отозвана, юзер активен.</summary>
+    int? ValidateSession(string jti);
+    void RevokeSession(string jti);
     void RevokeAllUserSessions(int userId);
 
     // ---------- Роли, профиль, блокировка ----------

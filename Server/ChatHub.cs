@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using SecureChat.Core;
 using SecureChat.Security;
+using SecureChat.Server.Auth;
 using Serilog;
 using ILogger = Serilog.ILogger;
 using Serilog.Context;
@@ -18,13 +19,15 @@ public class ChatHub : Hub
     private readonly IDatabase _db;
     private readonly IEmailService _email;
     private readonly ConnectionRegistry _registry;
+    private readonly IJwtTokenService _tokens;
     private readonly ILogger _log = Serilog.Log.ForContext<ChatHub>();
 
-    public ChatHub(IDatabase db, IEmailService email, ConnectionRegistry registry)
+    public ChatHub(IDatabase db, IEmailService email, ConnectionRegistry registry, IJwtTokenService tokens)
     {
         _db = db;
         _email = email;
         _registry = registry;
+        _tokens = tokens;
     }
 
     private int? UserId => _registry.GetUserId(Context.ConnectionId);
@@ -122,8 +125,13 @@ public class ChatHub : Hub
             return;
         }
 
+        // выпуск JWT-сессии: подписанный токен клиенту, строка сессии (jti) — в БД
+        string role = _db.GetUserRole(userId);
+        var issued = _tokens.Issue(userId, auth.Value.name, role);
+        _db.CreateSession(userId, issued.Jti, issued.ExpiresAtUtc);
+
         _registry.Register(userId, Context.ConnectionId);
-        RememberSessionToken(auth.Value.token);
+        RememberSessionToken(issued.Token);
 
         WriteAudit(userId, "Login", userId, "Ok");
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Login", userId);
@@ -133,7 +141,7 @@ public class ChatHub : Hub
             new LoginResponsePayload
             {
                 Status = "Ok", UserId = userId, UserName = auth.Value.name,
-                Token = auth.Value.token, Role = _db.GetUserRole(userId)
+                Token = issued.Token, Role = role
             });
 
         await NotifyOnlineStatus(userId);
@@ -175,17 +183,21 @@ public class ChatHub : Hub
             return;
         }
 
-        var reg = _db.RegisterUser(p.Email, p.Password, p.UserName, p.PublicKey);
-        if (reg == null)
+        int? regId = _db.RegisterUser(p.Email, p.Password, p.UserName, p.PublicKey);
+        if (regId == null)
         {
             _log.Warning("User already exists: {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "UserExists" });
             return;
         }
 
-        int userId = reg.Value.id;
+        int userId = regId.Value;
+        string role = _db.GetUserRole(userId);
+        var issued = _tokens.Issue(userId, p.UserName, role);
+        _db.CreateSession(userId, issued.Jti, issued.ExpiresAtUtc);
+
         _registry.Register(userId, Context.ConnectionId);
-        RememberSessionToken(reg.Value.token);
+        RememberSessionToken(issued.Token);
 
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Register", userId);
         _log.Information("New user registered userId={UserId}", userId);
@@ -195,7 +207,7 @@ public class ChatHub : Hub
         await Respond("RegisterAccountResponse",
             new RegisterAccountResponsePayload
             {
-                Status = "Ok", AssignedId = userId, Token = reg.Value.token, Role = _db.GetUserRole(userId)
+                Status = "Ok", AssignedId = userId, Token = issued.Token, Role = role
             });
 
         await NotifyOnlineStatus(userId);
@@ -205,9 +217,11 @@ public class ChatHub : Hub
     {
         if (p == null) return;
 
-        // Идентификация только по токену сессии: знание UserId не даёт доступа.
+        // Идентификация только по JWT: подпись/срок проверяет IJwtTokenService,
+        // строку сессии (jti) и активность пользователя — БД.
         int? userId = null;
-        if (!string.IsNullOrEmpty(p.Token)) userId = _db.ValidateSession(p.Token);
+        var tokenInfo = _tokens.Validate(p.Token);
+        if (tokenInfo != null) userId = _db.ValidateSession(tokenInfo.Jti);
 
         if (userId == null)
         {
@@ -238,7 +252,10 @@ public class ChatHub : Hub
         if (_registry.GetUserId(Context.ConnectionId) is not int uid) return;
 
         if (Context.Items.TryGetValue(SessionTokenKey, out var tokenObj) && tokenObj is string token)
-            _db.RevokeSession(token);
+        {
+            var info = _tokens.Validate(token);
+            if (info != null) _db.RevokeSession(info.Jti);
+        }
 
         _registry.Unregister(Context.ConnectionId, out _);
         Context.Items.Remove(SessionTokenKey);
