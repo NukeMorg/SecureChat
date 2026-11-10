@@ -56,9 +56,7 @@ public class PrintPreviewWindow : Window
 
         // Отправка на печать через XpsDocumentWriter (WPF)
         PrintQueue? queue = dlg.PrintQueue;
-        var writer = queue != null
-            ? PrintQueue.CreateXpsDocumentWriter(queue)
-            : PrintQueue.CreateXpsDocumentWriter(queue)!;
+        var writer = PrintQueue.CreateXpsDocumentWriter(queue);
 
         if (dlg.PrintTicket != null)
             writer.Write(paginator, dlg.PrintTicket);

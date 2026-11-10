@@ -182,6 +182,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
                     <!-- Индикатор и профиль -->
@@ -227,6 +228,37 @@
                             </Style>
                         </ListBox.ItemContainerStyle>
                     </ListBox>
+
+                    <!-- Круглая кнопка создания канала: левый нижний угол панели (видна только HR/Admin) -->
+                    <Button x:Name="ChannelCreateButton" Grid.Row="3"
+                            Width="36" Height="36"
+                            BorderThickness="0" Cursor="Hand"
+                            HorizontalAlignment="Left" Margin="4,6,0,1"
+                            Click="CreateChannel_Click"
+                            ToolTip="{Binding [CreateChannelTooltip], Source={x:Static local:LocalizationSource.Instance}}">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="Bd" Background="#FF1E88E5" CornerRadius="18">
+                                    <TextBlock Text="+"
+                                               FontSize="22" FontWeight="SemiBold"
+                                               Foreground="White"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Margin="0,-3,0,0"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Bd" Property="Background" Value="#FF1976D2"/>
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="Bd" Property="Background" Value="#FF1565C0"/>
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter TargetName="Bd" Property="Background" Value="#FF90A4AE"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
                 </Grid>
             </Border>
 

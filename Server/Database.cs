@@ -12,9 +12,18 @@ namespace SecureChat.Server;
 
 public class Database
 {
-    readonly string cs = "Data Source=server.db;Default Timeout=10;";
+    private readonly string cs;
     public string ConnectionString => cs;
     private static readonly ILogger Log = Serilog.Log.ForContext<Database>();
+
+    public Database() : this("Data Source=server.db;Default Timeout=10;")
+    {
+    }
+
+    public Database(string connectionString)
+    {
+        cs = connectionString;
+    }
 
     public void Initialize()
     {
@@ -91,8 +100,18 @@ public class Database
             );
             CREATE INDEX IF NOT EXISTS idx_login_attempts ON LoginAttempts(Email, AttemptedAt);";
         cmd.ExecuteNonQuery();
+
+        using (var sysCmd = conn.CreateCommand())
+        {
+            sysCmd.CommandText = @"
+                INSERT OR IGNORE INTO Clients (Id, Email, PasswordHash, Salt, PublicKey, UserName, Role, IsActive)
+                VALUES (0, 'system@channel.internal', '', '', 'SYSTEM', 'Channel System', 'System', 0);";
+            sysCmd.ExecuteNonQuery();
+        }
+
         Migrate(conn);
-        Log.Information("Database initialized: {DbPath}", Path.GetFullPath("server.db"));
+        var csb = new SqliteConnectionStringBuilder(cs);
+        Log.Information("Database initialized: {DbPath}", Path.GetFullPath(csb.DataSource));
     }
 
     /// <summary>Миграции существующей схемы: версии через PRAGMA user_version.</summary>
@@ -1220,7 +1239,7 @@ public class Database
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            if (list.Count >= limit) { list.Clear(); } // переполнение — начинаем заполнять заново
+            if (list.Count >= limit) continue; // лишнюю строку читаем только ради проверки HasMore
             list.Add(new ChannelMessageDto
             {
                 MessageId = reader.GetString(0),

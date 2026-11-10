@@ -282,6 +282,7 @@ public partial class MainWindow : Window
         AdminMenu.Visibility = _role == "Admin" ? Visibility.Visible : Visibility.Collapsed;
         bool hrOrAdmin = _role is "Admin" or "Manager";
         ChannelCreateMenuItem.Visibility = hrOrAdmin ? Visibility.Visible : Visibility.Collapsed;
+        ChannelCreateButton.Visibility = hrOrAdmin ? Visibility.Visible : Visibility.Collapsed;
         ChannelAddMemberMenuItem.Visibility = hrOrAdmin ? Visibility.Visible : Visibility.Collapsed;
         ChannelRemoveMemberMenuItem.Visibility = hrOrAdmin ? Visibility.Visible : Visibility.Collapsed;
     }
