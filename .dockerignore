@@ -1,0 +1,17 @@
+# Контекст сборки — корень репо; в образ сервера идут только Server/, Core/, Security/
+Client/
+Tests/
+.git/
+.vs/
+.zcode/
+data/
+**/bin/
+**/obj/
+**/logs/
+**/avatars/
+**/server.db
+**/server.db-shm
+**/server.db-wal
+.env
+README.md
+docker-compose.yml

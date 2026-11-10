@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Data;
+using HorizontalAlignment = System.Windows.HorizontalAlignment;
 
 namespace SecureChat.Client.Services
 {
@@ -29,6 +30,16 @@ namespace SecureChat.Client.Services
                 return b ? Visibility.Visible : Visibility.Collapsed;
             return Visibility.Collapsed;
         }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+            => throw new NotImplementedException();
+    }
+
+    // Конвертер string → Visibility (Visible если строка не пустая — для inline-ошибок).
+    public class StringNotEmptyToVisibilityConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+            => string.IsNullOrEmpty(value as string) ? Visibility.Collapsed : Visibility.Visible;
 
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
             => throw new NotImplementedException();

@@ -3,22 +3,90 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:SecureChat.Client"
         xmlns:conv="clr-namespace:SecureChat.Client.Services"
-        Title="SecureChat Enterprise" Height="650" Width="950"
+        Title="{Binding Title}" Height="650" Width="950"
         Background="{DynamicResource WindowBackground}"
         Foreground="{DynamicResource ForegroundColor}"
         Closing="Window_Closing">
 
     <Window.InputBindings>
-        <KeyBinding Command="{x:Static local:MainWindow.ExitCommand}" Gesture="Ctrl+Q"/>
-        <KeyBinding Command="{x:Static local:MainWindow.ToggleThemeCommand}" Gesture="Ctrl+T"/>
-        <KeyBinding Command="{x:Static local:MainWindow.ChangeNameCommand}" Gesture="Ctrl+N"/>
-        <KeyBinding Command="{x:Static local:MainWindow.ChangeServerAddressCommand}" Gesture="Ctrl+S"/>
+        <KeyBinding Command="{Binding ExitApplicationCommand}" Gesture="Ctrl+Q"/>
+        <KeyBinding Command="{Binding ToggleThemeCommand}" Gesture="Ctrl+T"/>
+        <KeyBinding Command="{Binding ChangeNameCommand}" Gesture="Ctrl+N"/>
+        <KeyBinding Command="{Binding ToggleChatSearchCommand}" Gesture="Ctrl+F"/>
+        <KeyBinding Command="{Binding ReconnectCommand}" Gesture="Ctrl+Shift+R"/>
     </Window.InputBindings>
 
     <Window.Resources>
         <conv:BoolToHorizontalAlignmentConverter x:Key="BoolToHorizontalAlignmentConverter"/>
         <conv:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
         <conv:FileNameConverter x:Key="FileNameConverter"/>
+
+        <!-- Контекстное меню строки сообщения: DataContext через PlacementTarget.Tag = ViewModel -->
+        <ContextMenu x:Key="MessageRowMenu"
+                     DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+            <MenuItem Header="Ответить" Command="{Binding ReplyToMessageCommand}"/>
+            <MenuItem Header="Изменить..." Command="{Binding EditMessageCommand}"/>
+            <MenuItem Header="Удалить" Command="{Binding DeleteMessageCommand}"/>
+        </ContextMenu>
+
+        <!-- Единый список: шаблон контакта -->
+        <DataTemplate x:Key="ContactTemplate">
+            <Border Background="{DynamicResource ContactItemBackground}" CornerRadius="6" Margin="2" Padding="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Ellipse Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center">
+                        <Ellipse.Style>
+                            <Style TargetType="Ellipse">
+                                <Setter Property="Fill" Value="Gray"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsOnline}" Value="True">
+                                        <Setter Property="Fill" Value="LimeGreen"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Ellipse.Style>
+                    </Ellipse>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"/>
+                        <TextBlock Text="{Binding StatusText}" FontSize="11"
+                                   Foreground="{DynamicResource StatusForeground}" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="1" Text="{Binding UnreadBadge}" HorizontalAlignment="Right"
+                               VerticalAlignment="Center" FontSize="11" FontWeight="Bold"
+                               Foreground="#FF1E88E5"/>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <!-- Единый список: шаблон канала -->
+        <DataTemplate x:Key="ChannelTemplate">
+            <Border Background="{DynamicResource ContactItemBackground}" CornerRadius="6" Margin="2" Padding="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="#" FontWeight="Bold" FontSize="14" Margin="0,0,8,0"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource StatusForeground}"/>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"/>
+                        <TextBlock Text="{Binding Subtitle}" FontSize="11"
+                                   Foreground="{DynamicResource StatusForeground}" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="1" Text="{Binding UnreadBadge}" HorizontalAlignment="Right"
+                               VerticalAlignment="Center" FontSize="11" FontWeight="Bold"
+                               Foreground="#FF1E88E5"/>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <local:ChatItemTemplateSelector ContactTemplate="{StaticResource ContactTemplate}"
+                                        ChannelTemplate="{StaticResource ChannelTemplate}"
+                                        x:Key="ChatItemSelector"/>
 
         <Style TargetType="Menu">
             <Setter Property="Background" Value="{DynamicResource SidebarBackground}"/>
@@ -43,35 +111,69 @@
 
         <Menu Grid.Row="0" FontSize="13" Background="{DynamicResource SidebarBackground}" Foreground="{DynamicResource ForegroundColor}">
             <!-- Файл -->
-            <MenuItem Header="Файл">
-                <MenuItem Header="Переподключиться" Click="Reconnect_Click"/>
-                <Separator/>
-                <MenuItem Header="Сменить учетную запись" Click="SwitchAccount_Click"/>
-                <MenuItem Header="Выход" Command="{x:Static local:MainWindow.ExitCommand}" InputGestureText="Ctrl+Q"/>
-            </MenuItem>
-
-            <!-- Сервер -->
-            <MenuItem Header="Сервер">
-                <MenuItem Header="Указать адрес сервера WebSocket..." Command="{x:Static local:MainWindow.ChangeServerAddressCommand}" InputGestureText="Ctrl+S"/>
+            <MenuItem Header="{Binding [MenuFile], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiPrint], Source={x:Static local:LocalizationSource.Instance}}" Click="PrintChat_Click"/>
+                <MenuItem Header="{Binding [MiSwitchAccount], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding SwitchAccountCommand}"/>
+                <MenuItem Header="{Binding [MiExit], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ExitApplicationCommand}" InputGestureText="Ctrl+Q"/>
             </MenuItem>
 
             <!-- Вид -->
-            <MenuItem Header="Вид">
-                <MenuItem Header="Сменить тему" Command="{x:Static local:MainWindow.ToggleThemeCommand}" InputGestureText="Ctrl+T"/>
+            <MenuItem Header="{Binding [MenuView], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiSearch], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ToggleChatSearchCommand}" InputGestureText="Ctrl+F"/>
+                <Separator/>
+                <MenuItem Header="{Binding [MiToggleTheme], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ToggleThemeCommand}" InputGestureText="Ctrl+T"/>
+                <MenuItem Header="{Binding [MiSettings], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding OpenSettingsCommand}"/>
             </MenuItem>
 
             <!-- Профиль -->
-            <MenuItem Header="Профиль">
-                <MenuItem Header="Изменить имя..." Command="{x:Static local:MainWindow.ChangeNameCommand}" InputGestureText="Ctrl+N"/>
+            <MenuItem Header="{Binding [MenuProfile], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiChangeName], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ChangeNameCommand}" InputGestureText="Ctrl+N"/>
+                <MenuItem Header="{Binding [MiChangePassword], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ChangePasswordCommand}"/>
+                <MenuItem Header="{Binding [MiChangeStatus], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ChangeStatusCommand}"/>
+                <MenuItem Header="{Binding [MiUploadAvatar], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding UploadAvatarCommand}"/>
                 <Separator/>
-                <MenuItem Header="Показать мой публичный ключ" Click="ShowMyPublicKey_Click"/>
+                <MenuItem Header="{Binding [MiMyProfile], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ShowMyProfileCommand}"/>
+                <MenuItem Header="{Binding [MiSelectedProfile], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ShowSelectedProfileCommand}"/>
+                <Separator/>
+                <MenuItem Header="{Binding [MiShowPublicKey], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ShowMyPublicKeyCommand}"/>
+            </MenuItem>
+
+            <!-- Администрирование (видно только роли Admin) -->
+            <MenuItem Header="{Binding [MenuAdmin], Source={x:Static local:LocalizationSource.Instance}}"
+                      Visibility="{Binding IsAdminVisible, Converter={StaticResource BoolToVisibilityConverter}}">
+                <MenuItem Header="{Binding [MiBan], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding BanSelectedUserCommand}"/>
+                <MenuItem Header="{Binding [MiUnban], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding UnbanSelectedUserCommand}"/>
+                <MenuItem Header="{Binding [MiChangeRole], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ChangeRoleSelectedUserCommand}"/>
+                <Separator/>
+                <MenuItem Header="{Binding [MiAuditLog], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding OpenAuditLogCommand}"/>
+            </MenuItem>
+
+            <!-- Экспорт (только клиент, расшифрованные данные текущего чата) -->
+            <MenuItem Header="{Binding [MenuExport], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiExcel], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ExportExcelCommand}"/>
+                <MenuItem Header="{Binding [MiWord], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ExportWordCommand}"/>
+            </MenuItem>
+
+            <!-- Каналы (создание и участники — только HR/Admin) -->
+            <MenuItem Header="{Binding [MenuChannels], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiCreateChannel], Source={x:Static local:LocalizationSource.Instance}}"
+                          Command="{Binding CreateChannelCommand}"
+                          Visibility="{Binding IsHrVisible, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                <MenuItem Header="{Binding [MiAddMember], Source={x:Static local:LocalizationSource.Instance}}"
+                          Command="{Binding AddChannelMemberCommand}"
+                          Visibility="{Binding IsHrVisible, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                <MenuItem Header="{Binding [MiRemoveMember], Source={x:Static local:LocalizationSource.Instance}}"
+                          Command="{Binding RemoveChannelMemberCommand}"
+                          Visibility="{Binding IsHrVisible, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                <Separator/>
+                <MenuItem Header="{Binding [MiRefreshChannels], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding RefreshChannelsListCommand}"/>
             </MenuItem>
 
             <!-- Справка -->
-            <MenuItem Header="Справка">
-                <MenuItem Header="О программе" Click="About_Click"/>
+            <MenuItem Header="{Binding [MenuHelp], Source={x:Static local:LocalizationSource.Instance}}">
+                <MenuItem Header="{Binding [MiAbout], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ShowAboutCommand}"/>
                 <Separator/>
-                <MenuItem Header="Руководство пользователя" Click="HelpGuide_Click"/>
+                <MenuItem Header="{Binding [MiUserGuide], Source={x:Static local:LocalizationSource.Instance}}" Command="{Binding ShowHelpGuideCommand}"/>
             </MenuItem>
         </Menu>
 
@@ -81,83 +183,154 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Левая панель: контакты со статусом в сети / не в сети -->
+            <!-- Левая панель: индикатор, поле поиска/добавления и единый список (контакты + каналы) -->
             <Border Grid.Column="0" Background="{DynamicResource SidebarBackground}" CornerRadius="8" Margin="8">
                 <Grid Margin="5">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
+                    <!-- Индикатор и профиль -->
                     <StackPanel Grid.Row="0" Margin="5">
                         <StackPanel Orientation="Horizontal">
-                            <Ellipse x:Name="ConnectionIndicator" Width="10" Height="10" Fill="Gray" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="UserIdTextBlock" Text="ID: -" FontWeight="Bold" FontSize="14"/>
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <TextBox x:Name="RecipientIdTextBox" Width="100" Margin="5"
-                                     Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
-                                     BorderBrush="{DynamicResource ForegroundColor}"/>
-                            <Button Content="Новый диалог" Click="NewDialogButton_Click" 
-                                    Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
-                                    BorderThickness="0" Height="25" FontSize="11" Margin="5"/>
-                            <Button Content="Тема" Click="ToggleTheme_Click"
-                                    Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
-                                    BorderThickness="0" Height="25" FontSize="11" Margin="5,0,0,0"/>
+                            <Ellipse Width="10" Height="10" Fill="{Binding ConnectionBrush}" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding HeaderUserText}" FontWeight="Bold" FontSize="14"/>
                         </StackPanel>
                     </StackPanel>
 
-                    <ListBox x:Name="ContactsListBox" Grid.Row="1"
+                    <!-- Единое поле поиска по имени и добавления диалога по ID + Enter -->
+                    <Grid Grid.Row="1" Margin="5,2,5,8">
+                        <TextBox x:Name="SearchAndAddTextBox" Height="28" Padding="6,4"
+                                 Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}"
+                                 BorderBrush="{DynamicResource StatusForeground}"
+                                 Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged}">
+                            <TextBox.InputBindings>
+                                <KeyBinding Command="{Binding AddContactFromSearchCommand}" Key="Enter"/>
+                            </TextBox.InputBindings>
+                        </TextBox>
+                        <TextBlock Text="{Binding [SearchContactHint], Source={x:Static local:LocalizationSource.Instance}}" IsHitTestVisible="False" Margin="8,6,0,0"
+                                   Foreground="{DynamicResource StatusForeground}" FontSize="12">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Text, ElementName=SearchAndAddTextBox}" Value="">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+
+                    <!-- Единый список: контакты + каналы (шаблон выбирается по типу элемента) -->
+                    <ListBox x:Name="ContactsListBox" Grid.Row="2"
                              Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
                              BorderThickness="0"
-                             SelectionChanged="ContactsListBox_SelectionChanged">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="{DynamicResource ContactItemBackground}" CornerRadius="6" Margin="2" Padding="8">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <!-- Индикатор онлайн: зеленый / серый -->
-                                        <Ellipse Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center">
-                                            <Ellipse.Style>
-                                                <Style TargetType="Ellipse">
-                                                    <Setter Property="Fill" Value="Gray"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsOnline}" Value="True">
-                                                            <Setter Property="Fill" Value="LimeGreen"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Ellipse.Style>
-                                        </Ellipse>
-                                        <!-- Имя + ID и только статус в сети / не в сети -->
-                                        <StackPanel Grid.Column="1">
-                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13"/>
-                                            <TextBlock Text="{Binding StatusText}" FontSize="11"
-                                                       Foreground="{DynamicResource StatusForeground}" TextTrimming="CharacterEllipsis"/>
-                                        </StackPanel>
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
+                             ItemTemplateSelector="{StaticResource ChatItemSelector}"
+                             ItemsSource="{Binding ChatList}"
+                             SelectedItem="{Binding SelectedChat, Mode=TwoWay}">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
                     </ListBox>
+
+                    <!-- Круглая кнопка создания канала: левый нижний угол панели (видна только HR/Admin) -->
+                    <Button x:Name="ChannelCreateButton" Grid.Row="3"
+                            Width="36" Height="36"
+                            BorderThickness="0" Cursor="Hand"
+                            HorizontalAlignment="Left" Margin="4,6,0,1"
+                            Command="{Binding CreateChannelCommand}"
+                            Visibility="{Binding IsHrVisible, Converter={StaticResource BoolToVisibilityConverter}}"
+                            ToolTip="{Binding [CreateChannelTooltip], Source={x:Static local:LocalizationSource.Instance}}">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="Bd" Background="#FF1E88E5" CornerRadius="18">
+                                    <TextBlock Text="+"
+                                               FontSize="22" FontWeight="SemiBold"
+                                               Foreground="White"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Margin="0,-3,0,0"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Bd" Property="Background" Value="#FF1976D2"/>
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="Bd" Property="Background" Value="#FF1565C0"/>
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter TargetName="Bd" Property="Background" Value="#FF90A4AE"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
                 </Grid>
             </Border>
 
-            <!-- Правая панель: переписка E2EE -->
+            <!-- Правая панель: переписка -->
             <Grid Grid.Column="1" Margin="8">
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
+                <!-- Строка поиска по выбранному чату (Ctrl+F) -->
+                <Border Grid.Row="0" x:Name="ChatSearchBar"
+                        Visibility="{Binding IsChatSearchVisible, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Background="{DynamicResource InputAreaBackground}" CornerRadius="8" Padding="6" Margin="0,0,0,5">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="ChatSearchBox" Height="26" Padding="6,3" FontSize="12" BorderThickness="0"
+                                 Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
+                                 VerticalContentAlignment="Center"
+                                 Text="{Binding ChatSearchQuery, UpdateSourceTrigger=PropertyChanged}">
+                            <TextBox.InputBindings>
+                                <KeyBinding Command="{Binding NextChatSearchMatchCommand}" Key="Enter"/>
+                                <KeyBinding Command="{Binding CloseChatSearchCommand}" Key="Escape"/>
+                            </TextBox.InputBindings>
+                        </TextBox>
+                        <TextBlock x:Name="ChatSearchCount" Grid.Column="1" Margin="8,0" VerticalAlignment="Center"
+                                   FontSize="11" Foreground="{DynamicResource StatusForeground}"
+                                   Text="{Binding ChatSearchCount}"/>
+                        <Button Grid.Column="2" Content="✕" Command="{Binding CloseChatSearchCommand}" Width="22" Height="22"
+                                Background="Transparent" Foreground="{DynamicResource ForegroundColor}" BorderThickness="0"/>
+                    </Grid>
+                </Border>
+
                 <Border Background="{DynamicResource ChatAreaBackground}" CornerRadius="8" Padding="8">
-                    <ListBox x:Name="MessagesListBox"
-                             Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
-                             BorderThickness="0"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <Grid>
+                        <ListBox x:Name="MessagesListBox"
+                                 Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
+                                 BorderThickness="0"
+                                 ItemsSource="{Binding CurrentMessages}"
+                                 SelectedItem="{Binding SelectedMessage, Mode=TwoWay}"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                                <!-- DataContext контекстного меню = ViewModel (через Tag строки) -->
+                                <Setter Property="Tag" Value="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ListBox}}"/>
+                                <!-- меню объявлено в ресурсах окна: события внутри Setter.Value
+                                     компилируются некорректно (IStyleConnector → InvalidCastException) -->
+                                <Setter Property="ContextMenu" Value="{StaticResource MessageRowMenu}"/>
+                                <EventSetter Event="PreviewMouseRightButtonDown" Handler="MessageRow_PreviewMouseRightButtonDown"/>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Grid HorizontalAlignment="{Binding IsOutgoing, Converter={StaticResource BoolToHorizontalAlignmentConverter}}" Margin="4">
@@ -173,19 +346,28 @@
                                             </Style>
                                         </Border.Style>
                                         <StackPanel>
+                                            <TextBlock Text="{Binding SenderName}" FontWeight="SemiBold" FontSize="11"
+                                                       Foreground="{DynamicResource StatusForeground}"
+                                                       Visibility="{Binding HasSenderName, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                            <TextBlock Text="{Binding ReplyPreview}" FontSize="11" FontStyle="Italic"
+                                                       Foreground="{DynamicResource StatusForeground}" TextWrapping="Wrap"
+                                                       Visibility="{Binding HasReply, Converter={StaticResource BoolToVisibilityConverter}}"/>
                                             <TextBlock Text="{Binding Text}" Visibility="{Binding TextVisibility}"
                                                        Foreground="{DynamicResource MessageTextForeground}" FontSize="13" TextWrapping="Wrap"/>
                                             <StackPanel Orientation="Horizontal" Visibility="{Binding FileVisibility}">
                                                 <TextBlock Text="📎 " Foreground="{DynamicResource MessageTextForeground}"/>
                                                 <TextBlock Text="{Binding FilePath, Converter={StaticResource FileNameConverter}}" 
                                                            Foreground="{DynamicResource FilePathForeground}" FontSize="13"/>
+                                                <TextBlock Text="{Binding FileSizeText}" FontSize="11" Margin="6,0,0,0"
+                                                           VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource StatusForeground}"
+                                                           Visibility="{Binding HasFileSize, Converter={StaticResource BoolToVisibilityConverter}}"/>
                                             </StackPanel>
                                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,4,0,0">
                                                 <TextBlock Text="{Binding Timestamp, StringFormat={}{0:HH:mm}}" FontSize="10"
                                                             Foreground="{DynamicResource TimestampForeground}" Margin="0,0,4,0"/>
-                                                <TextBlock Text="{Binding Status}" FontSize="9"
-                                                           Foreground="{DynamicResource StatusForeground}"
-                                                           Visibility="{Binding IsOutgoing, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                                                <TextBlock Text="{Binding EditedMark}" FontSize="9"
+                                                           Foreground="{DynamicResource StatusForeground}"/>
                                             </StackPanel>
                                         </StackPanel>
                                     </Border>
@@ -193,16 +375,40 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                        <Button x:Name="LoadMoreButton" Content="↑ Загрузить ещё" Command="{Binding LoadMoreCommand}"
+                                Visibility="{Binding IsLoadMoreVisible, Converter={StaticResource BoolToVisibilityConverter}}"
+                                HorizontalAlignment="Right" VerticalAlignment="Top"
+                                Background="{DynamicResource InputAreaBackground}" Foreground="{DynamicResource ForegroundColor}"
+                                BorderThickness="0" Padding="8,3" FontSize="11" Margin="0,2,4,0"/>
+                    </Grid>
                 </Border>
 
-                <Border Grid.Row="1" Background="{DynamicResource InputAreaBackground}" CornerRadius="8" Padding="5" Margin="0,5,0,0">
+                <!-- Панель ответа/редактирования -->
+                <Border Grid.Row="2" x:Name="ReplyBar"
+                        Visibility="{Binding IsReplyBarVisible, Converter={StaticResource BoolToVisibilityConverter}}"
+                        Background="{DynamicResource InputAreaBackground}" CornerRadius="8"
+                        Padding="8,5" Margin="0,5,0,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="ReplyBarText" Text="{Binding ReplyBarText}" TextTrimming="CharacterEllipsis" FontSize="12"
+                                   Foreground="{DynamicResource StatusForeground}" VerticalAlignment="Center"/>
+                        <Button Grid.Column="1" Content="✕" Command="{Binding CancelReplyCommand}"
+                                Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
+                                BorderThickness="0" Width="24" Height="24"/>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="3" Background="{DynamicResource InputAreaBackground}" CornerRadius="8" Padding="5" Margin="0,5,0,0">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <Button Content="📎" Click="AttachFileButton_Click" 
+                        <Button Content="📎" Command="{Binding AttachFileCommand}" 
                                 Background="Transparent" Foreground="{DynamicResource ForegroundColor}" BorderThickness="0"
                                 Width="35" Height="35" FontSize="16" Margin="5"/>
                         <TextBox x:Name="MessageTextBox" Grid.Column="1"
@@ -210,11 +416,12 @@
                                  Background="Transparent" Foreground="{DynamicResource ForegroundColor}"
                                  BorderThickness="0" Padding="10,8"
                                  VerticalContentAlignment="Center" MaxLines="4"
+                                 Text="{Binding MessageText, UpdateSourceTrigger=PropertyChanged}"
                                  PreviewKeyDown="MessageTextBox_PreviewKeyDown"/>
-                        <Button Grid.Column="2" Content="➤" Click="SendButton_Click"
+                        <Button Grid.Column="2" Content="➤" Command="{Binding SendTextCommand}"
                                 Background="#FF1E88E5" Foreground="White" BorderThickness="0"
                                 Width="40" Height="40" FontSize="18" Margin="5"
-                                ToolTip="Отправить (Ctrl+Enter)"/>
+                                ToolTip="{Binding [SendTooltip], Source={x:Static local:LocalizationSource.Instance}}"/>
                     </Grid>
                 </Border>
             </Grid>

@@ -1,28 +1,31 @@
 ﻿using System;
-using System.IO;
-using System.Net.WebSockets;
-using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using SecureChat.Common;
+using Microsoft.AspNetCore.SignalR.Client;
+using SecureChat.Core;
+using Serilog;
 
 namespace SecureChat.Client.Services;
 
-// Сетевое взаимодействие через WebSocket (ClientWebSocket) с поддержкой авторизации
+/// <summary>
+/// Транспортный слой клиента на SignalR HubConnection.
+/// Каждый метод протокола — типизированный вызов хаб-метода; входящие события
+/// пробрасываются наружу без изменений, поэтому окна не зависят от транспорта.
+/// </summary>
 public class NetworkService
 {
-    private ClientWebSocket? _ws;              // Активное WS-соединение
-    private CancellationTokenSource? _cts;     // Отмена фоновых операций
-    private volatile bool _isDisconnecting;    // Флаг, чтобы не сыпать ошибками при штатном отключении
+    private HubConnection? _hub;
+    private HelloPayload? _lastHello;
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
 
-    // События входящих сообщений от сервера
+    private static readonly ILogger Log = Serilog.Log.ForContext<NetworkService>();
+
+    public event Action<SendEmailCodeResponsePayload>? OnSendEmailCodeResponse;
     public event Action<IncomingMessagePayload>? OnIncomingMessage;
     public event Action<DeliveryStatusPayload>? OnDeliveryStatus;
     public event Action<PublicKeyResponsePayload>? OnPublicKeyResponse;
     public event Action<UserProfileUpdatedPayload>? OnUserProfileUpdated;
     public event Action<UserInfoResponsePayload>? OnUserInfoResponse;
-    public event Action<HistoryResponsePayload>? OnHistoryResponse;
     public event Action<ContactListPayload>? OnContactList;
     public event Action<string>? OnError;
     public event Action? OnConnected;
@@ -31,160 +34,315 @@ public class NetworkService
     public event Action<RegisterAccountResponsePayload>? OnRegisterAccountResponse;
     public event Action<HelloResponsePayload>? OnHelloResponse;
     public event Action<AddContactResponsePayload>? OnAddContactResponse;
-    public event Action<int>? OnUserOnline;    // Пользователь вошёл в сеть
-    public event Action<int>? OnUserOffline;   // Пользователь вышел из сети
+    public event Action<int>? OnUserOnline;
+    public event Action<int>? OnUserOffline;
+    public event Action<string>? OnBanned;
+    public event Action<GroupKeyDeliveryPayload>? OnGroupKeyDelivery;
+    public event Action<ChannelKeyRotatedPayload>? OnChannelKeyRotated;
+    public event Action<ChannelMemberAddedPayload>? OnChannelMemberAdded;
+    public event Action<ChannelMemberRemovedPayload>? OnChannelMemberRemoved;
+    public event Action<IncomingChannelMessagePayload>? OnIncomingChannelMessage;
+    public event Action<MessageEditedPayload>? OnMessageEdited;
+    public event Action<MessageDeletedPayload>? OnMessageDeleted;
 
-    public bool IsConnected => _ws?.State == WebSocketState.Open;
+    public bool IsConnected => _hub?.State == HubConnectionState.Connected;
 
-    // Установка соединения с сервером
+    // ---------- Подключение ----------
+
     public async Task ConnectAsync(string serverUrl)
     {
-        Disconnect();                         // Закрываем предыдущее соединение
-        _isDisconnecting = false;
-        _cts = new CancellationTokenSource();
+        if (IsConnected) return;
 
-        // Нормализация URL: префикс ws:// и завершающий слэш
-        string normalizedUrl = serverUrl.Trim();
-        if (!normalizedUrl.StartsWith("ws://") && !normalizedUrl.StartsWith("wss://"))
-        {
-            normalizedUrl = "ws://" + normalizedUrl;
-        }
-        if (!normalizedUrl.EndsWith("/"))
-        {
-            normalizedUrl += "/";
-        }
+        Disconnect();
+        string hubUrl = NormalizeHubUrl(serverUrl);
 
         try
         {
-            _ws = new ClientWebSocket();
-            await _ws.ConnectAsync(new Uri(normalizedUrl), _cts.Token);
+            Log.Information("Connecting to {Url}", hubUrl);
+            _hub = new HubConnectionBuilder()
+                .WithUrl(hubUrl)
+                .WithAutomaticReconnect(new[]
+                {
+                    TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4),
+                    TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(16), TimeSpan.FromSeconds(30)
+                })
+                .Build();
+
+            RegisterHandlers();
+            _hub.Reconnected += OnHubReconnected;
+            _hub.Closed += OnHubClosed;
+
+            await _hub.StartAsync();
+            Log.Information("Connected to {Url}", hubUrl);
             OnConnected?.Invoke();
-            _ = Task.Run(ReadLoop);           // Запуск фонового чтения
         }
         catch (Exception ex)
         {
-            OnError?.Invoke($"Ошибка подключения к {normalizedUrl}: {ex.Message}");
+            Log.Error(ex, "Failed to connect to {Url}", hubUrl);
+            OnError?.Invoke($"Ошибка подключения к {hubUrl}: {ex.Message}");
             Disconnect();
             throw;
         }
     }
 
-    // Отправка сообщения в формате JSON
-    public async Task SendAsync(object message)
+    public void Disconnect()
     {
-        if (_ws == null || _ws.State != WebSocketState.Open)
-        {
-            if (!_isDisconnecting) OnError?.Invoke("Нет подключения к серверу");
-            return;
-        }
+        var hub = _hub;
+        _hub = null;
+        _lastHello = null;
+        if (hub == null) return;
+
+        bool wasActive = hub.State != HubConnectionState.Disconnected;
         try
         {
-            string json = JsonSerializer.Serialize(message);
-            byte[] bytes = Encoding.UTF8.GetBytes(json);
-            await _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+            hub.Closed -= OnHubClosed;
+            hub.Reconnected -= OnHubReconnected;
         }
-        catch (Exception ex)
-        {
-            if (!_isDisconnecting) OnError?.Invoke($"Ошибка отправки: {ex.Message}");
-        }
+        catch { }
+
+        Log.Information("Disconnecting from server");
+        _ = Task.Run(async () => { try { await hub.DisposeAsync(); } catch { } });
+        if (wasActive) OnDisconnected?.Invoke();
     }
 
-    // Фоновый цикл приёма сообщений
-    private async Task ReadLoop()
+    // ---------- Хаб-методы: аутентификация ----------
+
+    public Task LoginAsync(LoginPayload payload) => InvokeAsync("Login", payload);
+
+    public Task SendEmailCodeAsync(SendEmailCodePayload payload) => InvokeAsync("SendEmailCode", payload);
+
+    public Task RegisterAccountAsync(RegisterAccountPayload payload) => InvokeAsync("RegisterAccount", payload);
+
+    public Task HelloAsync(HelloPayload payload)
     {
-        byte[] buffer = new byte[64 * 1024];
+        _lastHello = payload;
+        return InvokeAsync("Hello", payload);
+    }
+
+    // ---------- Хаб-методы: чаты и контакты ----------
+
+    public Task SendMessageAsync(SendMessagePayload payload) => InvokeAsync("SendMessage", payload);
+
+    public Task AckAsync(AckPayload payload) => InvokeAsync("Ack", payload);
+
+    public Task<HistoryResponsePayload?> GetHistoryAsync(GetHistoryRequestPayload payload) =>
+        InvokeWithResultAsync<HistoryResponsePayload>("GetHistory", payload);
+
+    public Task GetContactsAsync() => InvokeAsync("GetContacts");
+
+    public Task GetPublicKeyAsync(GetPublicKeyPayload payload) => InvokeAsync("GetPublicKey", payload);
+
+    public Task GetUserInfoAsync(GetUserInfoPayload payload) => InvokeAsync("GetUserInfo", payload);
+
+    public Task AddContactAsync(AddContactPayload payload) => InvokeAsync("AddContact", payload);
+
+    public Task UpdateProfileAsync(UpdateProfilePayload payload) => InvokeAsync("UpdateProfile", payload);
+
+    // ---------- Администрирование (request/response через возвращаемое значение) ----------
+
+    public Task<SimpleStatusPayload?> BanUserAsync(BanUserPayload payload) =>
+        InvokeWithResultAsync("BanUser", payload);
+
+    public Task<SimpleStatusPayload?> UnbanUserAsync(UnbanUserPayload payload) =>
+        InvokeWithResultAsync("UnbanUser", payload);
+
+    public Task<SimpleStatusPayload?> ChangeRoleAsync(ChangeRolePayload payload) =>
+        InvokeWithResultAsync("ChangeRole", payload);
+
+    public Task<SimpleStatusPayload?> ChangePasswordAsync(ChangePasswordPayload payload) =>
+        InvokeWithResultAsync("ChangePassword", payload);
+
+    // ---------- Профиль: статус и аватар ----------
+
+    public Task<SimpleStatusPayload?> UpdateStatusAsync(UpdateStatusPayload payload) =>
+        InvokeWithResultAsync("UpdateStatus", payload);
+
+    public Task<SimpleStatusPayload?> UploadAvatarAsync(UploadAvatarPayload payload) =>
+        InvokeWithResultAsync("UploadAvatar", payload);
+
+    public Task<UserProfileDto?> GetUserProfileAsync(GetUserProfilePayload payload) =>
+        InvokeWithResultAsync<UserProfileDto>("GetUserProfile", payload);
+
+    public Task<AuditLogResponsePayload?> GetAuditLogAsync(GetAuditLogPayload payload) =>
+        InvokeWithResultAsync<AuditLogResponsePayload>("GetAuditLog", payload);
+
+    // ---------- Каналы ----------
+
+    public Task<CreateChannelResponsePayload?> CreateChannelAsync(CreateChannelPayload payload) =>
+        InvokeWithResultAsync<CreateChannelResponsePayload>("CreateChannel", payload);
+
+    public Task<ChannelListPayload?> GetChannelsAsync() =>
+        InvokeWithResultAsync<ChannelListPayload>("GetChannels", null);
+
+    public Task<ChannelMembersPayload?> GetChannelMembersAsync(JoinChannelPayload payload) =>
+        InvokeWithResultAsync<ChannelMembersPayload>("GetChannelMembers", payload);
+
+    public Task<SimpleStatusPayload?> JoinChannelAsync(JoinChannelPayload payload) =>
+        InvokeWithResultAsync("JoinChannel", payload);
+
+    public Task<SimpleStatusPayload?> LeaveChannelAsync(JoinChannelPayload payload) =>
+        InvokeWithResultAsync("LeaveChannel", payload);
+
+    public Task<SimpleStatusPayload?> AddChannelMemberAsync(AddChannelMemberPayload payload) =>
+        InvokeWithResultAsync("AddChannelMember", payload);
+
+    public Task<SimpleStatusPayload?> RemoveChannelMemberAsync(RemoveChannelMemberPayload payload) =>
+        InvokeWithResultAsync("RemoveChannelMember", payload);
+
+    public Task SendGroupKeyDeliveryAsync(GroupKeyDeliveryPayload payload) =>
+        InvokeAsync("SendGroupKeyDelivery", payload);
+
+    public Task SendChannelKeyRotatedAsync(ChannelKeyRotatedPayload payload) =>
+        InvokeAsync("SendChannelKeyRotated", payload);
+
+    public Task SendChannelMessageAsync(SendChannelMessagePayload payload) =>
+        InvokeAsync("SendChannelMessage", payload);
+
+    public Task<ChannelHistoryResponsePayload?> GetChannelHistoryAsync(GetChannelHistoryPayload payload) =>
+        InvokeWithResultAsync<ChannelHistoryResponsePayload>("GetChannelHistory", payload);
+
+    // ---------- Редактирование и удаление ----------
+
+    public Task<SimpleStatusPayload?> EditMessageAsync(EditMessagePayload payload) =>
+        InvokeWithResultAsync("EditMessage", payload);
+
+    public Task<SimpleStatusPayload?> DeleteMessageAsync(DeleteMessagePayload payload) =>
+        InvokeWithResultAsync("DeleteMessage", payload);
+
+    /// <summary>Вызов хаб-метода с ответом-статусом (Admin-операции, смена пароля).</summary>
+    private Task<SimpleStatusPayload?> InvokeWithResultAsync(string methodName, object payload) =>
+        InvokeWithResultAsync<SimpleStatusPayload>(methodName, payload);
+
+    /// <summary>Вызов хаб-метода с типизированным ответом (payload = null — метод без аргументов).</summary>
+    private async Task<TResponse?> InvokeWithResultAsync<TResponse>(string? methodName, object? payload = null)
+    {
+        var hub = _hub;
+        if (hub == null || hub.State != HubConnectionState.Connected || methodName == null)
+            return default;
+
+        await _sendLock.WaitAsync();
         try
         {
-            while (_ws?.State == WebSocketState.Open && !_cts!.Token.IsCancellationRequested)
-            {
-                // Накопление фрагментированного сообщения
-                using var ms = new MemoryStream();
-                WebSocketReceiveResult result;
-                do
-                {
-                    result = await _ws.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token);
-                    if (result.MessageType == WebSocketMessageType.Close)
-                    {
-                        await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
-                        return;
-                    }
-                    ms.Write(buffer, 0, result.Count);
-                } while (!result.EndOfMessage);
-
-                // Десериализация базового конверта
-                string json = Encoding.UTF8.GetString(ms.ToArray());
-                var msg = JsonSerializer.Deserialize<BaseMessage>(json);
-                if (msg == null) continue;
-
-                // Маршрутизация по типу сообщения
-                switch (msg.Type)
-                {
-                    case "LoginResponse":
-                        OnLoginResponse?.Invoke(msg.Payload.Deserialize<LoginResponsePayload>()!);
-                        break;
-                    case "RegisterAccountResponse":
-                        OnRegisterAccountResponse?.Invoke(msg.Payload.Deserialize<RegisterAccountResponsePayload>()!);
-                        break;
-                    case "HelloResponse":
-                        OnHelloResponse?.Invoke(msg.Payload.Deserialize<HelloResponsePayload>()!);
-                        break;
-                    case "IncomingMessage":
-                        OnIncomingMessage?.Invoke(msg.Payload.Deserialize<IncomingMessagePayload>()!);
-                        break;
-                    case "DeliveryStatus":
-                        OnDeliveryStatus?.Invoke(msg.Payload.Deserialize<DeliveryStatusPayload>()!);
-                        break;
-                    case "PublicKeyResponse":
-                        OnPublicKeyResponse?.Invoke(msg.Payload.Deserialize<PublicKeyResponsePayload>()!);
-                        break;
-                    case "ContactList":
-                        OnContactList?.Invoke(msg.Payload.Deserialize<ContactListPayload>()!);
-                        break;
-                    case "UserProfileUpdated":
-                        OnUserProfileUpdated?.Invoke(msg.Payload.Deserialize<UserProfileUpdatedPayload>()!);
-                        break;
-                    case "UserInfoResponse":
-                        OnUserInfoResponse?.Invoke(msg.Payload.Deserialize<UserInfoResponsePayload>()!);
-                        break;
-                    case "HistoryResponse":
-                        OnHistoryResponse?.Invoke(msg.Payload.Deserialize<HistoryResponsePayload>()!);
-                        break;
-                    case "AddContactResponse":
-                        OnAddContactResponse?.Invoke(msg.Payload.Deserialize<AddContactResponsePayload>()!);
-                        break;
-                    case "UserOnline":
-                        var online = msg.Payload.Deserialize<OnlineStatusPayload>();
-                        if (online != null) OnUserOnline?.Invoke(online.UserId);
-                        break;
-                    case "UserOffline":
-                        var offline = msg.Payload.Deserialize<OnlineStatusPayload>();
-                        if (offline != null) OnUserOffline?.Invoke(offline.UserId);
-                        break;
-                    case "Error":
-                        var err = msg.Payload.Deserialize<SimpleStatusPayload>();
-                        OnError?.Invoke(err?.Status ?? "UnknownError");
-                        break;
-                }
-            }
+            if (payload == null)
+                return await hub.InvokeAsync<TResponse?>(methodName);
+            return await hub.InvokeAsync<TResponse?>(methodName, payload);
         }
-        catch (OperationCanceledException) { }   // Штатная отмена
         catch (Exception ex)
         {
-            if (!_isDisconnecting) OnError?.Invoke($"Ошибка сети WebSocket: {ex.Message}");
+            Log.Error(ex, "Send error {Method}", methodName);
+            return default;
         }
         finally
         {
-            OnDisconnected?.Invoke();
-            if (!_isDisconnecting) Disconnect();  // Автоотключение при разрыве
+            _sendLock.Release();
         }
     }
 
-    // Принудительное закрытие соединения
-    public void Disconnect()
+    /// <summary>Отзыв сессии на сервере (Logout). Сбрасывает сохранённый Hello.</summary>
+    public async Task LogoutAsync()
     {
-        _isDisconnecting = true;
-        _cts?.Cancel();
-        try { _ws?.Dispose(); } catch { }
-        _ws = null;
+        _lastHello = null;
+        await InvokeAsync("Logout");
+    }
+
+    /// <summary>Отключение с опциональным отзывом сессии перед закрытием соединения.</summary>
+    public async Task DisconnectAsync(bool logout = false)
+    {
+        if (logout) await LogoutAsync();
+        Disconnect();
+    }
+
+    // ---------- Внутреннее ----------
+
+    private async Task InvokeAsync(string methodName, object? payload = null)
+    {
+        var hub = _hub;
+        if (hub == null || hub.State != HubConnectionState.Connected)
+        {
+            OnError?.Invoke("Нет подключения к серверу");
+            return;
+        }
+
+        await _sendLock.WaitAsync();
+        try
+        {
+            if (payload == null)
+                await hub.InvokeAsync(methodName);
+            else
+                await hub.InvokeAsync(methodName, payload);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Send error {Method}", methodName);
+            OnError?.Invoke($"Ошибка отправки: {ex.Message}");
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
+    }
+
+    private void RegisterHandlers()
+    {
+        var hub = _hub!;
+        hub.On<SendEmailCodeResponsePayload>("SendEmailCodeResponse", p => OnSendEmailCodeResponse?.Invoke(p));
+        hub.On<LoginResponsePayload>("LoginResponse", p => OnLoginResponse?.Invoke(p));
+        hub.On<RegisterAccountResponsePayload>("RegisterAccountResponse", p => OnRegisterAccountResponse?.Invoke(p));
+        hub.On<HelloResponsePayload>("HelloResponse", p => OnHelloResponse?.Invoke(p));
+        hub.On<IncomingMessagePayload>("IncomingMessage", p => OnIncomingMessage?.Invoke(p));
+        hub.On<DeliveryStatusPayload>("DeliveryStatus", p => OnDeliveryStatus?.Invoke(p));
+        hub.On<PublicKeyResponsePayload>("PublicKeyResponse", p => OnPublicKeyResponse?.Invoke(p));
+        hub.On<ContactListPayload>("ContactList", p => OnContactList?.Invoke(p));
+        hub.On<UserProfileUpdatedPayload>("UserProfileUpdated", p => OnUserProfileUpdated?.Invoke(p));
+        hub.On<UserInfoResponsePayload>("UserInfoResponse", p => OnUserInfoResponse?.Invoke(p));
+        hub.On<AddContactResponsePayload>("AddContactResponse", p => OnAddContactResponse?.Invoke(p));
+        hub.On<OnlineStatusPayload>("UserOnline", p => OnUserOnline?.Invoke(p.UserId));
+        hub.On<OnlineStatusPayload>("UserOffline", p => OnUserOffline?.Invoke(p.UserId));
+        hub.On<SimpleStatusPayload>("Error", p => OnError?.Invoke(p?.Status ?? "UnknownError"));
+        hub.On<BannedPayload>("Banned", p => OnBanned?.Invoke(p?.Reason ?? ""));
+        hub.On<GroupKeyDeliveryPayload>("GroupKeyDelivery", p => OnGroupKeyDelivery?.Invoke(p));
+        hub.On<ChannelKeyRotatedPayload>("ChannelKeyRotated", p => OnChannelKeyRotated?.Invoke(p));
+        hub.On<ChannelMemberAddedPayload>("ChannelMemberAdded", p => OnChannelMemberAdded?.Invoke(p));
+        hub.On<ChannelMemberRemovedPayload>("ChannelMemberRemoved", p => OnChannelMemberRemoved?.Invoke(p));
+        hub.On<IncomingChannelMessagePayload>("IncomingChannelMessage", p => OnIncomingChannelMessage?.Invoke(p));
+        hub.On<MessageEditedPayload>("MessageEdited", p => OnMessageEdited?.Invoke(p));
+        hub.On<MessageDeletedPayload>("MessageDeleted", p => OnMessageDeleted?.Invoke(p));
+    }
+
+    private async Task OnHubReconnected(string? connectionId)
+    {
+        Log.Information("Auto-reconnect completed connectionId={ConnectionId}", connectionId);
+        var hub = _hub;
+        if (hub != null && _lastHello != null)
+        {
+            try
+            {
+                // новое соединение не аутентифицировано — восстанавливаем сессию
+                await hub.InvokeAsync("Hello", _lastHello);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to restore session after reconnect");
+            }
+        }
+        OnConnected?.Invoke();
+    }
+
+    private Task OnHubClosed(Exception? error)
+    {
+        if (error != null) Log.Warning(error, "Connection closed with error");
+        OnDisconnected?.Invoke();
+        return Task.CompletedTask;
+    }
+
+    internal static string NormalizeHubUrl(string serverUrl)
+    {
+        string url = serverUrl.Trim();
+        if (url.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)) url = "http://" + url[5..];
+        else if (url.StartsWith("wss://", StringComparison.OrdinalIgnoreCase)) url = "https://" + url[6..];
+        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            url = "http://" + url;
+        return url.TrimEnd('/') + "/hub";
     }
 }

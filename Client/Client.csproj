@@ -7,38 +7,42 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<RootNamespace>SecureChat.Client</RootNamespace>
 	</PropertyGroup>
+
 	<ItemGroup>
-	  <None Remove="Images\add_contact.png" />
-	  <None Remove="Images\attach_file_button.png" />
-	  <None Remove="Images\connection_indicator.png" />
-	  <None Remove="Images\intro_main_window.png" />
-	  <None Remove="Images\profile_menu.png" />
-	  <None Remove="Images\theme_toggle.png" />
+		<None Remove="Images\add_contact.png" />
+		<None Remove="Images\attach_file_button.png" />
+		<None Remove="Images\connection_indicator.png" />
+		<None Remove="Images\intro_main_window.png" />
+		<None Remove="Images\profile_menu.png" />
+		<None Remove="Images\theme_toggle.png" />
 	</ItemGroup>
 
 	<ItemGroup>
-		<Compile Include="..\Shared\MessageTypes.cs" Link="MessageTypes.cs" />
+		<ProjectReference Include="..\Core\SecureChat.Core.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>
-	  <Resource Include="Images\add_contact.png">
-	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-	  </Resource>
-	  <Resource Include="Images\attach_file_button.png">
-	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-	  </Resource>
-	  <Resource Include="Images\connection_indicator.png">
-	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-	  </Resource>
-	  <Resource Include="Images\intro_main_window.png">
-	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-	  </Resource>
-	  <Resource Include="Images\profile_menu.png">
-	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-	  </Resource>
-	  <Resource Include="Images\theme_toggle.png">
-	    <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-	  </Resource>
+		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+		<PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.13" />
+		<PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.13" />
+		<PackageReference Include="Serilog" Version="4.1.0" />
+		<PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+		<PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+		<PackageReference Include="Serilog.Settings.Configuration" Version="8.0.4" />
+		<PackageReference Include="Serilog.Formatting.Compact" Version="3.0.0" />
+		<PackageReference Include="Serilog.Enrichers.Environment" Version="3.0.1" />
+		<PackageReference Include="Serilog.Enrichers.Thread" Version="4.0.0" />
+		<PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.0" />
+		<PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Resource Include="Images\add_contact.png" />
+		<Resource Include="Images\attach_file_button.png" />
+		<Resource Include="Images\connection_indicator.png" />
+		<Resource Include="Images\intro_main_window.png" />
+		<Resource Include="Images\profile_menu.png" />
+		<Resource Include="Images\theme_toggle.png" />
 	</ItemGroup>
 
 	<ItemGroup>
@@ -52,6 +56,7 @@
 			<DependentUpon>Settings.settings</DependentUpon>
 		</Compile>
 	</ItemGroup>
+
 	<ItemGroup>
 		<Page Update="Themes\DarkTheme.xaml">
 			<CopyToOutputDirectory>Never</CopyToOutputDirectory>
@@ -63,5 +68,11 @@
 		<Page Update="Themes\StubTheme.xaml">
 			<CopyToOutputDirectory>Never</CopyToOutputDirectory>
 		</Page>
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Update="appsettings.json">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
 	</ItemGroup>
 </Project>

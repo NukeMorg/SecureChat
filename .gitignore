@@ -70,6 +70,15 @@ x86/
 # Publish Web Output
 *.[Pp]ublish.xml
 
-### Client
-# Client images folder
-Client/Images/
+### Secrets and runtime data
+# SMTP-пароль не хранится в репозитории — только через user-secrets
+*.db
+*.db-shm
+*.db-wal
+logs/
+avatars/
+secrets/
+.zcode/
+Images/
+.env
+*.pfx.zcode/
