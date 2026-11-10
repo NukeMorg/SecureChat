@@ -20,14 +20,17 @@ public class ChatHub : Hub
     private readonly IEmailService _email;
     private readonly ConnectionRegistry _registry;
     private readonly IJwtTokenService _tokens;
+    private readonly ISessionRepository _sessions;
     private readonly ILogger _log = Serilog.Log.ForContext<ChatHub>();
 
-    public ChatHub(IDatabase db, IEmailService email, ConnectionRegistry registry, IJwtTokenService tokens)
+    public ChatHub(IDatabase db, IEmailService email, ConnectionRegistry registry,
+        IJwtTokenService tokens, ISessionRepository sessions)
     {
         _db = db;
         _email = email;
         _registry = registry;
         _tokens = tokens;
+        _sessions = sessions;
     }
 
     private int? UserId => _registry.GetUserId(Context.ConnectionId);
@@ -125,10 +128,10 @@ public class ChatHub : Hub
             return;
         }
 
-        // выпуск JWT-сессии: подписанный токен клиенту, строка сессии (jti) — в БД
+        // выпуск JWT-сессии: подписанный токен клиенту, строка сессии (jti) — в репозиторий
         string role = _db.GetUserRole(userId);
         var issued = _tokens.Issue(userId, auth.Value.name, role);
-        _db.CreateSession(userId, issued.Jti, issued.ExpiresAtUtc);
+        _sessions.Create(userId, issued);
 
         _registry.Register(userId, Context.ConnectionId);
         RememberSessionToken(issued.Token);
@@ -194,7 +197,7 @@ public class ChatHub : Hub
         int userId = regId.Value;
         string role = _db.GetUserRole(userId);
         var issued = _tokens.Issue(userId, p.UserName, role);
-        _db.CreateSession(userId, issued.Jti, issued.ExpiresAtUtc);
+        _sessions.Create(userId, issued);
 
         _registry.Register(userId, Context.ConnectionId);
         RememberSessionToken(issued.Token);
@@ -218,10 +221,8 @@ public class ChatHub : Hub
         if (p == null) return;
 
         // Идентификация только по JWT: подпись/срок проверяет IJwtTokenService,
-        // строку сессии (jti) и активность пользователя — БД.
-        int? userId = null;
-        var tokenInfo = _tokens.Validate(p.Token);
-        if (tokenInfo != null) userId = _db.ValidateSession(tokenInfo.Jti);
+        // строку сессии (jti) и активность пользователя — SessionRepository.
+        int? userId = string.IsNullOrEmpty(p.Token) ? null : _sessions.Validate(p.Token);
 
         if (userId == null)
         {
@@ -252,10 +253,7 @@ public class ChatHub : Hub
         if (_registry.GetUserId(Context.ConnectionId) is not int uid) return;
 
         if (Context.Items.TryGetValue(SessionTokenKey, out var tokenObj) && tokenObj is string token)
-        {
-            var info = _tokens.Validate(token);
-            if (info != null) _db.RevokeSession(info.Jti);
-        }
+            _sessions.Revoke(token);
 
         _registry.Unregister(Context.ConnectionId, out _);
         Context.Items.Remove(SessionTokenKey);
@@ -282,7 +280,7 @@ public class ChatHub : Hub
 
         int adminId = UserId!.Value;
         _db.SetUserActive(p.TargetId, false);
-        _db.RevokeAllUserSessions(p.TargetId); // отзыв сессий при бане
+        _sessions.RevokeAllForUser(p.TargetId); // отзыв сессий при бане
 
         foreach (var connId in _registry.GetConnections(p.TargetId))
         {
@@ -359,7 +357,7 @@ public class ChatHub : Hub
             return new SimpleStatusPayload { Status = "WeakPassword" };
 
         _db.UpdatePassword(uid, p.NewPassword);
-        _db.RevokeAllUserSessions(uid);
+        _sessions.RevokeAllForUser(uid);
 
         WriteAudit(uid, "ChangePassword", uid, "Ok");
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId}", "ChangePassword", uid);

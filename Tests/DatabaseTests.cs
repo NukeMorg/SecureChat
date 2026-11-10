@@ -44,7 +44,7 @@ public class DatabaseTests : IDisposable
         using (var reader = cmd.ExecuteReader())
             while (reader.Read()) tables.Add(reader.GetString(0));
 
-        foreach (string expected in new[] { "Clients", "Sessions", "EmailVerifications", "EmailRateLimits",
+        foreach (string expected in new[] { "Clients", "EmailVerifications", "EmailRateLimits",
                  "LoginAttempts", "Messages", "Contacts", "Channels", "ChannelMembers", "ChannelKeys", "AuditLog" })
         {
             Assert.Contains(expected, tables);
@@ -105,59 +105,6 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void RegisterUser_DefaultRoleIsEmployee() =>
         Assert.Equal("Employee", _db.GetUserRole(RegisterTestUser("role@test.local")));
-
-    // ---------- Сессии (строки по jti; JWT-обёртка тестируется в JwtTokenServiceTests) ----------
-
-    [Fact]
-    public void CreateSession_ValidateSession_RoundTrip()
-    {
-        int userId = RegisterTestUser("sess@test.local");
-        string jti = Guid.NewGuid().ToString("N");
-        _db.CreateSession(userId, jti, DateTime.UtcNow.AddDays(7));
-
-        Assert.Equal(userId, _db.ValidateSession(jti));
-    }
-
-    [Fact]
-    public void ValidateSession_UnknownJti_ReturnsNull() =>
-        Assert.Null(_db.ValidateSession("no-such-jti"));
-
-    [Fact]
-    public void ValidateSession_ExpiredSession_ReturnsNull()
-    {
-        int userId = RegisterTestUser("expired-sess@test.local");
-        string jti = Guid.NewGuid().ToString("N");
-        _db.CreateSession(userId, jti, DateTime.UtcNow.AddMinutes(-1));
-
-        Assert.Null(_db.ValidateSession(jti));
-    }
-
-    [Fact]
-    public void RevokeSession_SessionBecomesInvalid()
-    {
-        int userId = RegisterTestUser("revoke@test.local");
-        string jti = Guid.NewGuid().ToString("N");
-        _db.CreateSession(userId, jti, DateTime.UtcNow.AddDays(7));
-
-        _db.RevokeSession(jti);
-
-        Assert.Null(_db.ValidateSession(jti));
-    }
-
-    [Fact]
-    public void RevokeAllUserSessions_AllSessionsInvalid()
-    {
-        int userId = RegisterTestUser("revokeall@test.local");
-        string jti1 = Guid.NewGuid().ToString("N");
-        string jti2 = Guid.NewGuid().ToString("N");
-        _db.CreateSession(userId, jti1, DateTime.UtcNow.AddDays(7));
-        _db.CreateSession(userId, jti2, DateTime.UtcNow.AddDays(7));
-
-        _db.RevokeAllUserSessions(userId);
-
-        Assert.Null(_db.ValidateSession(jti1));
-        Assert.Null(_db.ValidateSession(jti2));
-    }
 
     // ---------- Коды подтверждения email ----------
 

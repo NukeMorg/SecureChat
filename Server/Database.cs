@@ -52,13 +52,6 @@ public class Database : IDatabase
                 Code TEXT NOT NULL,
                 ExpiresAt TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS Sessions (
-                Jti TEXT PRIMARY KEY,
-                UserId INTEGER NOT NULL,
-                CreatedAt TEXT NOT NULL,
-                ExpiresAt TEXT NOT NULL,
-                FOREIGN KEY (UserId) REFERENCES Clients(Id)
-            );
             CREATE TABLE IF NOT EXISTS Messages (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 MessageId TEXT UNIQUE NOT NULL,
@@ -278,6 +271,14 @@ public class Database : IDatabase
 
     private static bool TryAddColumn(SqliteConnection conn, string table, string column, string type)
     {
+        // таблица может отсутствовать (например, Sessions переезжает в SessionRepository)
+        using (var check = conn.CreateCommand())
+        {
+            check.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=@table";
+            check.Parameters.AddWithValue("@table", table);
+            if ((long)check.ExecuteScalar()! == 0) return false;
+        }
+
         try
         {
             using var cmd = conn.CreateCommand();
@@ -478,69 +479,6 @@ public class Database : IDatabase
             }
         }
         return null;
-    }
-
-    // ---------- Сессии (JWT: строки хранятся по jti; выпуск и валидация токена — IJwtTokenService) ----------
-
-    public void CreateSession(int userId, string jti, DateTime expiresAtUtc)
-    {
-        using var conn = new SqliteConnection(cs);
-        conn.Open();
-        var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO Sessions (Jti, UserId, CreatedAt, ExpiresAt)
-            VALUES (@jti, @uid, @time, @expires)";
-        cmd.Parameters.AddWithValue("@jti", jti);
-        cmd.Parameters.AddWithValue("@uid", userId);
-        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
-        cmd.Parameters.AddWithValue("@expires", expiresAtUtc.ToString("o"));
-        cmd.ExecuteNonQuery();
-    }
-
-    public int? ValidateSession(string jti)
-    {
-        using var conn = new SqliteConnection(cs);
-        conn.Open();
-        CleanupSessions(conn);
-        var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-            SELECT s.UserId FROM Sessions s
-            JOIN Clients c ON c.Id = s.UserId
-            WHERE s.Jti = @jti AND s.ExpiresAt > @now AND c.IsActive = 1";
-        cmd.Parameters.AddWithValue("@jti", jti);
-        cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("o"));
-        var result = cmd.ExecuteScalar();
-        return result != null ? Convert.ToInt32(result) : null;
-    }
-
-    /// <summary>Logout: удаление сессии.</summary>
-    public void RevokeSession(string jti)
-    {
-        using var conn = new SqliteConnection(cs);
-        conn.Open();
-        var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM Sessions WHERE Jti = @jti";
-        cmd.Parameters.AddWithValue("@jti", jti);
-        cmd.ExecuteNonQuery();
-    }
-
-    /// <summary>Отзыв всех сессий пользователя (смена пароля, бан).</summary>
-    public void RevokeAllUserSessions(int userId)
-    {
-        using var conn = new SqliteConnection(cs);
-        conn.Open();
-        var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM Sessions WHERE UserId = @uid";
-        cmd.Parameters.AddWithValue("@uid", userId);
-        cmd.ExecuteNonQuery();
-    }
-
-    private static void CleanupSessions(SqliteConnection conn)
-    {
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM Sessions WHERE ExpiresAt <= @now";
-        cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("o"));
-        cmd.ExecuteNonQuery();
     }
 
     // ---------- Роли, профиль, блокировка ----------

@@ -22,6 +22,7 @@ public class ChatHubIntegrationTests : IAsyncLifetime
     private ConnectionRegistry _registry = null!;
     private IEmailService _email = null!;
     private IJwtTokenService _tokens = null!;
+    private ISessionRepository _sessions = null!;
     private WebApplication _app = null!;
     private string _serverUrl = null!;
     private string _hubUrl = null!;
@@ -43,6 +44,8 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         {
             Secret = "integration-test-secret-0123456789abcdef-0123456789abcdef"
         }));
+        _sessions = new SessionRepository(_db.ConnectionString, _tokens);
+        _sessions.Initialize();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseKestrel();
@@ -52,6 +55,7 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         builder.Services.AddSingleton(_registry);
         builder.Services.AddSingleton(_email);
         builder.Services.AddSingleton(_tokens);
+        builder.Services.AddSingleton(_sessions);
         builder.Services.AddSignalR(options =>
         {
             options.MaximumReceiveMessageSize = 20 * 1024 * 1024;
@@ -92,7 +96,7 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         int id = _db.RegisterUser(email, password, name, publicKey)
             ?? throw new InvalidOperationException($"RegisterUser failed for {email}");
         var issued = _tokens.Issue(id, name, "Employee");
-        _db.CreateSession(id, issued.Jti, issued.ExpiresAtUtc);
+        _sessions.Create(id, issued);
         return (id, issued.Token);
     }
 
@@ -402,7 +406,7 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         string sessionToken = loginResp.Token;
 
         // Сессия валидна
-        Assert.NotNull(_db.ValidateSession(_tokens.Validate(sessionToken)!.Jti));
+        Assert.NotNull(_sessions.Validate(sessionToken));
 
         // 7b. Logout
         var logoutResp = await AwaitEventAsync<SimpleStatusPayload>(
@@ -412,7 +416,7 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         Assert.Equal("Ok", logoutResp.Status);
 
         // Сессия отозвана
-        Assert.Null(_db.ValidateSession(_tokens.Validate(sessionToken)!.Jti));
+        Assert.Null(_sessions.Validate(sessionToken));
 
         // 7c. Баним пользователя в БД
         _db.SetUserActive(userId, false);

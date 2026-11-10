@@ -31,14 +31,6 @@ public interface IDatabase
     /// <summary>Проверка пароля (с миграцией хэша); токен сессии выпускает ChatHub.</summary>
     (int id, string name)? Authenticate(string email, string password);
 
-    // ---------- Сессии (строки в Sessions; JWT-обёртка — IJwtTokenService) ----------
-    /// <summary>Сохраняет строку сессии по jti из выпущенного JWT.</summary>
-    void CreateSession(int userId, string jti, DateTime expiresAtUtc);
-    /// <summary>Проверка строки сессии по jti: не истекла, не отозвана, юзер активен.</summary>
-    int? ValidateSession(string jti);
-    void RevokeSession(string jti);
-    void RevokeAllUserSessions(int userId);
-
     // ---------- Роли, профиль, блокировка ----------
     string GetUserRole(int userId);
     void SetUserRole(int userId, string role);

@@ -24,6 +24,10 @@ public class Program
         builder.Services.AddSingleton<IDatabase, Database>();
         builder.Services.AddSingleton<IEmailService, EmailService>();
         builder.Services.AddSingleton<IJwtTokenService, JwtTokenService>();
+        builder.Services.AddSingleton<ISessionRepository>(sp =>
+            new SessionRepository(
+                sp.GetRequiredService<IDatabase>().ConnectionString,
+                sp.GetRequiredService<IJwtTokenService>()));
 
         builder.Services.AddSignalR(options =>
         {
@@ -42,6 +46,7 @@ public class Program
 
         Log.Information("=== SecureChat Server started on {Machine} ===", Environment.MachineName);
         app.Services.GetRequiredService<IDatabase>().Initialize();
+        app.Services.GetRequiredService<ISessionRepository>().Initialize();
 
         try
         {
