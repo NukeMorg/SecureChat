@@ -81,5 +81,7 @@ appsettings.*.json
 logs/
 avatars/
 secrets/
+.zcode/
+Images/
 .env
 *.pfx.zcode/
