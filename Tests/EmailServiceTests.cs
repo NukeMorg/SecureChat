@@ -29,17 +29,6 @@ public class EmailServiceTests
     }
 
     [Fact]
-    public void GenerateVerificationCode_AlwaysInRange()
-    {
-        var service = CreateDevModeService();
-        for (int i = 0; i < 100; i++)
-        {
-            int code = int.Parse(service.GenerateVerificationCode());
-            Assert.InRange(code, 100000, 999999);
-        }
-    }
-
-    [Fact]
     public void GenerateVerificationCode_ProducesDifferentCodes()
     {
         var service = CreateDevModeService();

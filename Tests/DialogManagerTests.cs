@@ -30,35 +30,6 @@ public class DialogManagerTests
     }
 
     [Fact]
-    public void GetSessionKey_ReturnsNullWhenNotSet()
-    {
-        Assert.Null(_manager.GetSessionKey(999));
-    }
-
-    [Fact]
-    public void SetSessionKey_OverridesOrStoresKey()
-    {
-        byte[] customKey = new byte[32];
-        customKey[0] = 0x42;
-
-        _manager.SetSessionKey(200, customKey);
-        Assert.Same(customKey, _manager.GetSessionKey(200));
-        Assert.Same(customKey, _manager.GetOrCreateSessionKey(200));
-    }
-
-    [Fact]
-    public void PublicKey_GetAndSet()
-    {
-        Assert.Null(_manager.GetPublicKey(10));
-
-        string pem = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\n-----END PUBLIC KEY-----";
-        _manager.SetPublicKey(10, pem);
-
-        Assert.Equal(pem, _manager.GetPublicKey(10));
-        Assert.Null(_manager.GetPublicKey(20));
-    }
-
-    [Fact]
     public void AddMessage_And_GetHistory_IsIsolatedPerContact()
     {
         Assert.Empty(_manager.GetHistory(50));

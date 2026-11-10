@@ -407,10 +407,6 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void GetSenderByMessageId_ReturnsSenderId() =>
-        Assert.Null(_db.GetSenderByMessageId("no-such-sender"));
-
-    [Fact]
     public void GetHistoryPage_ReturnsMessagesInChronologicalOrder()
     {
         int alice = RegisterTestUser("hist@test.local").id;

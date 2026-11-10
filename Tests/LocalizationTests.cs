@@ -28,6 +28,14 @@ public class LocalizationTests
 
         Assert.True(missingInEn.Count == 0, $"Ключи отсутствуют в Strings.en.resx: {string.Join(", ", missingInEn)}");
         Assert.True(missingInRu.Count == 0, $"Ключи отсутствуют в Strings.resx: {string.Join(", ", missingInRu)}");
+
+        // русский и английский переводы ключевых строк должны отличаться (не копия)
+        foreach (var key in new[] { "MiCreateChannel", "CreateChannelTooltip" })
+        {
+            string ru = ruSet.GetString(key)!;
+            string en = enSet.GetString(key)!;
+            Assert.NotEqual(ru, en);
+        }
     }
 
     [Fact]
@@ -47,19 +55,6 @@ public class LocalizationTests
             string val = (string)entry.Value!;
             Assert.False(string.IsNullOrWhiteSpace(val), $"Пустое значение для ключа {entry.Key} в en");
         }
-    }
-
-    [Theory]
-    [InlineData("MiCreateChannel")]
-    [InlineData("CreateChannelTooltip")]
-    public void Resources_ChannelCreationKeysExistInBothLanguages(string key)
-    {
-        string? ru = Rm.GetString(key, new CultureInfo("ru-RU"));
-        string? en = Rm.GetString(key, new CultureInfo("en-US"));
-
-        Assert.False(string.IsNullOrWhiteSpace(ru));
-        Assert.False(string.IsNullOrWhiteSpace(en));
-        Assert.NotEqual(ru, en); // русский и английский переводы должны отличаться
     }
 
     [Fact]

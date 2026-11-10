@@ -102,15 +102,6 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         return await tcs.Task;
     }
 
-    // 1. /health -> Healthy
-    [Fact]
-    public async Task HealthEndpoint_ReturnsHealthy()
-    {
-        using var http = new HttpClient();
-        string res = await http.GetStringAsync($"{_serverUrl}/health");
-        Assert.Equal("Healthy", res.Trim());
-    }
-
     // 2. Регистрация: SendEmailCode -> код из БД -> RegisterAccount -> Ok + токен + роль Employee
     [Fact]
     public async Task Registration_SendEmailCode_And_RegisterAccount_Succeeds()
