@@ -53,6 +53,7 @@
   <data name="MiChangeRole" xml:space="preserve"><value>Change role of selected user...</value></data>
   <data name="MiAuditLog" xml:space="preserve"><value>Audit log...</value></data>
   <data name="MiCreateChannel" xml:space="preserve"><value>Create channel...</value></data>
+  <data name="CreateChannelTooltip" xml:space="preserve"><value>Create channel</value></data>
   <data name="MiAddMember" xml:space="preserve"><value>Add member...</value></data>
   <data name="MiRemoveMember" xml:space="preserve"><value>Remove member...</value></data>
   <data name="MiRefreshChannels" xml:space="preserve"><value>Refresh list</value></data>

@@ -335,7 +335,7 @@ public class NetworkService
         return Task.CompletedTask;
     }
 
-    private static string NormalizeHubUrl(string serverUrl)
+    internal static string NormalizeHubUrl(string serverUrl)
     {
         string url = serverUrl.Trim();
         if (url.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)) url = "http://" + url[5..];

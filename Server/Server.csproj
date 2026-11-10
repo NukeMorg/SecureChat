@@ -6,12 +6,6 @@
 		<UserSecretsId>e0771e05-958e-4eb3-99f6-9384a953c004</UserSecretsId>
 	</PropertyGroup>
 	<ItemGroup>
-		<Compile Remove="Services\**" />
-		<EmbeddedResource Remove="Services\**" />
-		<None Remove="Services\**" />
-	</ItemGroup>
-
-	<ItemGroup>
 		<PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
 		<PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.13" />
 		<PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.13" />

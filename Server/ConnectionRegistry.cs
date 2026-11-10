@@ -39,9 +39,13 @@ public sealed class ConnectionRegistry
         if (_byUser.TryGetValue(uid, out var set))
         {
             set.TryRemove(connectionId, out _);
-            if (set.IsEmpty) _byUser.TryRemove(uid, out _);
+            if (set.IsEmpty)
+            {
+                _byUser.TryRemove(uid, out _);
+                return true; // последнее соединение пользователя — теперь полностью офлайн
+            }
         }
-        return true;
+        return false; // у пользователя остались другие соединения
     }
 
     public int? GetUserId(string connectionId) =>

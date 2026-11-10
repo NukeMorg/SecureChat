@@ -53,6 +53,7 @@
   <data name="MiChangeRole" xml:space="preserve"><value>Сменить роль выбранного...</value></data>
   <data name="MiAuditLog" xml:space="preserve"><value>Журнал аудита...</value></data>
   <data name="MiCreateChannel" xml:space="preserve"><value>Создать канал...</value></data>
+  <data name="CreateChannelTooltip" xml:space="preserve"><value>Создать канал</value></data>
   <data name="MiAddMember" xml:space="preserve"><value>Добавить участника...</value></data>
   <data name="MiRemoveMember" xml:space="preserve"><value>Удалить участника...</value></data>
   <data name="MiRefreshChannels" xml:space="preserve"><value>Обновить список</value></data>
