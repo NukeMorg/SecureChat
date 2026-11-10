@@ -84,7 +84,7 @@ public partial class MainWindow : Window
         _userName = "User";
         _token = "";
         _role = "Employee";
-        _serverAddress = LoginWindow.StaticServerUrl;
+        _serverAddress = ConfigService.DefaultServerUrl;
         _publicKeyPem = "";
         _privateKeyPem = "";
         _network = new NetworkService();
@@ -321,7 +321,7 @@ public partial class MainWindow : Window
     private async Task PerformAccountSwitchAsync()
     {
         await _network.DisconnectAsync(logout: true);
-        LoginWindow.ClearAutoLoginState();
+        ConfigService.ClearAutoLoginState();
         var app = (App)Application.Current;
         app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         Hide();

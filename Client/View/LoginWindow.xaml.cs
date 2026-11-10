@@ -1,8 +1,5 @@
 ﻿using System;
-using System.IO;
 using System.Linq;
-using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -14,19 +11,15 @@ using Serilog;
 
 namespace SecureChat.Client.View;
 
-public record AutoLoginSession(int UserId, string UserName, string Token, string PublicKey, string PrivateKey, string Role);
-
 public partial class LoginWindow : Window
 {
-    public const string StaticServerUrl = "ws://localhost:9000/";
-
     private static readonly ILogger Log = Serilog.Log.ForContext<LoginWindow>();
 
     public int AuthenticatedUserId { get; private set; }
     public string AuthenticatedUserName { get; private set; } = "User";
     public string AuthenticatedUserRole { get; private set; } = "Employee";
     public string Token { get; private set; } = "";
-    public string ServerUrl => StaticServerUrl;
+    public string ServerUrl => ConfigService.DefaultServerUrl;
     public string PublicKeyPem { get; private set; } = "";
     public string PrivateKeyPem { get; private set; } = "";
     public NetworkService Network { get; private set; }
@@ -241,7 +234,7 @@ public partial class LoginWindow : Window
         try
         {
             if (!Network.IsConnected)
-                await Network.ConnectAsync(StaticServerUrl);
+                await Network.ConnectAsync(ConfigService.DefaultServerUrl);
 
             _loginTcs = new TaskCompletionSource<LoginResponsePayload>();
             await Network.LoginAsync(new LoginPayload { Email = email, Password = password });
@@ -335,7 +328,7 @@ public partial class LoginWindow : Window
         try
         {
             if (!Network.IsConnected)
-                await Network.ConnectAsync(StaticServerUrl);
+                await Network.ConnectAsync(ConfigService.DefaultServerUrl);
 
             _codeTcs = new TaskCompletionSource<SendEmailCodeResponsePayload>();
             await Network.SendEmailCodeAsync(new SendEmailCodePayload { Email = email, Purpose = "Register" });
@@ -408,7 +401,7 @@ public partial class LoginWindow : Window
         try
         {
             if (!Network.IsConnected)
-                await Network.ConnectAsync(StaticServerUrl);
+                await Network.ConnectAsync(ConfigService.DefaultServerUrl);
 
             if (string.IsNullOrEmpty(PublicKeyPem) || string.IsNullOrEmpty(PrivateKeyPem))
             {
@@ -494,7 +487,7 @@ public partial class LoginWindow : Window
         try
         {
             if (!Network.IsConnected)
-                await Network.ConnectAsync(StaticServerUrl);
+                await Network.ConnectAsync(ConfigService.DefaultServerUrl);
 
             _codeTcs = new TaskCompletionSource<SendEmailCodeResponsePayload>();
             await Network.SendEmailCodeAsync(new SendEmailCodePayload { Email = _pendingEmail, Purpose = "Register" });
@@ -528,158 +521,22 @@ public partial class LoginWindow : Window
         finally { ResendCodeButton.IsEnabled = true; }
     }
 
-    private static string ConfigDir =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SecureChat");
-
-    private static string ConfigFile => Path.Combine(ConfigDir, "config.json");
-
     private void LoadSavedConfig()
     {
-        try
-        {
-            if (!File.Exists(ConfigFile)) return;
-            var cfg = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, string>>(File.ReadAllText(ConfigFile));
-            if (cfg == null) return;
+        var saved = ConfigService.ReadSavedCredentials();
+        if (saved == null) return;
 
-            if (cfg.TryGetValue("PublicKey", out var pub)) PublicKeyPem = pub;
-            if (cfg.TryGetValue("PrivateKey", out var priv))
-            {
-                string? decrypted = SecretProtector.Unprotect(priv);
-                if (decrypted != null) PrivateKeyPem = decrypted;
-            }
-            bool remember = cfg.TryGetValue("RememberMe", out var rem) && rem == "true";
-            RememberMeCheckBox.IsChecked = remember;
-            if (remember && cfg.TryGetValue("Login", out var log) && !string.IsNullOrWhiteSpace(log))
-                LoginEmailBox.Text = log;
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Failed to read config.json");
-        }
+        PublicKeyPem = saved.PublicKeyPem;
+        PrivateKeyPem = saved.PrivateKeyPem;
+        RememberMeCheckBox.IsChecked = saved.RememberMe;
+        if (saved.RememberMe && !string.IsNullOrWhiteSpace(saved.Login))
+            LoginEmailBox.Text = saved.Login;
     }
 
     private void SaveConfig(string email, bool isRegistration)
     {
-        try
-        {
-            Directory.CreateDirectory(ConfigDir);
-            var cfg = new System.Collections.Generic.Dictionary<string, string>
-            {
-                ["ClientId"] = AuthenticatedUserId.ToString(),
-                ["UserName"] = AuthenticatedUserName,
-                // секреты шифруются через DPAPI (CurrentUser)
-                ["Token"] = SecretProtector.Protect(Token),
-                ["PublicKey"] = PublicKeyPem,
-                ["PrivateKey"] = SecretProtector.Protect(PrivateKeyPem),
-                ["Theme"] = App.CurrentTheme
-            };
-
-            if (isRegistration)
-            {
-                cfg["RememberMe"] = "false";
-            }
-            else
-            {
-                bool remember = RememberMeCheckBox.IsChecked == true;
-                cfg["RememberMe"] = remember ? "true" : "false";
-                if (remember) cfg["Login"] = email;
-            }
-
-            File.WriteAllText(ConfigFile, JsonSerializer.Serialize(cfg));
-            Log.Debug("config.json saved");
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Failed to save config.json");
-        }
-    }
-
-    public static void ClearAutoLoginState()
-    {
-        try
-        {
-            if (!File.Exists(ConfigFile)) return;
-            var cfg = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, string>>(File.ReadAllText(ConfigFile));
-            if (cfg == null) return;
-            cfg["RememberMe"] = "false";
-            cfg.Remove("Login");
-            File.WriteAllText(ConfigFile, JsonSerializer.Serialize(cfg));
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Failed to clear auto-login");
-        }
-    }
-
-    public static AutoLoginSession? ReadAutoLoginConfig()
-    {
-        try
-        {
-            if (!File.Exists(ConfigFile)) return null;
-            var cfg = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, string>>(File.ReadAllText(ConfigFile));
-            if (cfg == null) return null;
-            if (!cfg.TryGetValue("RememberMe", out var rem) || rem != "true") return null;
-            if (!cfg.TryGetValue("Token", out var tokenRaw) || string.IsNullOrEmpty(tokenRaw)) return null;
-            if (!cfg.TryGetValue("PublicKey", out var pub) || string.IsNullOrEmpty(pub)) return null;
-            if (!cfg.TryGetValue("PrivateKey", out var privRaw) || string.IsNullOrEmpty(privRaw)) return null;
-            if (!cfg.TryGetValue("ClientId", out var idStr) || !int.TryParse(idStr, out var id)) return null;
-            if (!cfg.TryGetValue("UserName", out var name) || string.IsNullOrEmpty(name)) return null;
-
-            string? token = SecretProtector.Unprotect(tokenRaw);
-            string? privateKey = SecretProtector.Unprotect(privRaw);
-            if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(privateKey)) return null;
-
-            return new AutoLoginSession(id, name, token, pub, privateKey, "Employee");
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "Failed to read auto-login");
-            return null;
-        }
-    }
-
-    public static AutoLoginSession? TryAutoLoginBlocking(NetworkService network, AutoLoginSession saved, int timeoutMs)
-    {
-        try
-        {
-            return Task.Run(async () =>
-            {
-                using var cts = new CancellationTokenSource(timeoutMs);
-                try
-                {
-                    await network.ConnectAsync(StaticServerUrl).WaitAsync(cts.Token);
-
-                    var tcs = new TaskCompletionSource<HelloResponsePayload>();
-                    void handler(HelloResponsePayload p) => tcs.TrySetResult(p);
-                    network.OnHelloResponse += handler;
-                    try
-                    {
-                        await network.HelloAsync(new HelloPayload { ClientId = saved.UserId, Token = saved.Token });
-
-                        var resp = await tcs.Task.WaitAsync(cts.Token);
-                        if (resp == null || resp.Status != "Ok") return null;
-
-                        return new AutoLoginSession(
-                            resp.UserId,
-                            string.IsNullOrEmpty(resp.UserName) ? saved.UserName : resp.UserName,
-                            saved.Token, saved.PublicKey, saved.PrivateKey,
-                            string.IsNullOrEmpty(resp.Role) ? "Employee" : resp.Role);
-                    }
-                    finally { network.OnHelloResponse -= handler; }
-                }
-                catch (Exception ex)
-                {
-                    Log.Warning(ex, "TryAutoLoginBlocking failed");
-                    try { network.Disconnect(); } catch { }
-                    return null;
-                }
-            }).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "TryAutoLoginBlocking outer error");
-            try { network.Disconnect(); } catch { }
-            return null;
-        }
+        var session = new AutoLoginSession(AuthenticatedUserId, AuthenticatedUserName, Token,
+            PublicKeyPem, PrivateKeyPem, AuthenticatedUserRole);
+        ConfigService.SaveSession(session, rememberMe: !isRegistration && RememberMeCheckBox.IsChecked == true, login: email);
     }
 }

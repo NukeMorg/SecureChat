@@ -53,15 +53,15 @@ public partial class App : Application
         CurrentTheme = LoadThemeFromSettings();
         ApplyThemeInternal(CurrentTheme, saveToSettings: false);
 
-        var saved = LoginWindow.ReadAutoLoginConfig();
+        var saved = ConfigService.ReadAutoLoginConfig();
         if (saved != null)
         {
             Log.Information("Auto-login attempt userId={UserId}", saved.UserId);
-            var session = LoginWindow.TryAutoLoginBlocking(Network, saved, timeoutMs: 5000);
+            var session = ConfigService.TryAutoLoginBlocking(Network, saved, timeoutMs: 5000);
             if (session != null)
             {
                 var mainWindow = new MainWindow(session.UserId, session.UserName, session.Token,
-                    LoginWindow.StaticServerUrl, session.PublicKey, session.PrivateKey, session.Role, Network);
+                    ConfigService.DefaultServerUrl, session.PublicKey, session.PrivateKey, session.Role, Network);
                 MainWindow = mainWindow;
                 ShutdownMode = ShutdownMode.OnMainWindowClose;
                 mainWindow.Show();
