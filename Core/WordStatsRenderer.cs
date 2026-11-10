@@ -7,7 +7,7 @@ using DocumentFormat.OpenXml.Wordprocessing;
 namespace SecureChat.Core;
 
 /// <summary>
-/// Экспорт чата в Word (требование 1.5.2, OpenXML SDK).
+/// Экспорт чата в Word (OpenXML SDK).
 /// XXE-защита: все операции чтения XML — только с DtdProcessing.Prohibit и XmlResolver=null.
 /// Агрегаты идентичны Excel-рендеру (один ChatAggregator).
 /// </summary>

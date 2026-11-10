@@ -18,7 +18,7 @@ namespace SecureChat.Client;
 public partial class App : Application
 {
     public static string CurrentTheme { get; set; } = "Dark";
-    /// <summary>Текущая локаль в полном формате BCP-47/ISO: "ru-RU" | "en-US" (требование 1.8.1).</summary>
+    /// <summary>Текущая локаль в полном формате BCP-47/ISO: "ru-RU" | "en-US".</summary>
     public static string CurrentLocale { get; set; } = "ru-RU";
     public static NetworkService Network { get; } = new();
 
@@ -36,7 +36,7 @@ public partial class App : Application
             .Enrich.FromLogContext()
             .CreateLogger();
 
-        // Локализация (требование 1.8): CurrentCulture — формат данных, CurrentUICulture — строки UI.
+        // Локализация: CurrentCulture — формат данных, CurrentUICulture — строки UI.
         // Язык UI переключается на лету; формат логов от языка не зависит (всегда English/Invariant).
         ApplyLanguageFromConfig();
         FrameworkElement.LanguageProperty.OverrideMetadata(typeof(FrameworkElement),
@@ -100,7 +100,7 @@ public partial class App : Application
 
     public static void ApplyTheme(string theme) => ApplyThemeInternal(theme, saveToSettings: true);
 
-    // ---------- Локализация (Лаба 8) ----------
+    // ---------- Локализация ----------
 
     /// <summary>
     /// Смена локали на лету: принимается полный код ("ru-RU", "en-US") или короткий ("ru", "en").

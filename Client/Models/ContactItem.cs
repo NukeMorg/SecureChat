@@ -57,7 +57,7 @@ public class ContactItem : INotifyPropertyChanged
         }
     }
 
-    // Непрочитанные сообщения (Фаза D): счётчик сбрасывается при открытии диалога
+    // Непрочитанные сообщения: счётчик сбрасывается при открытии диалога
     private int _unreadCount;
     public int UnreadCount
     {

@@ -5,7 +5,7 @@ using Xunit;
 namespace SecureChat.Tests;
 
 /// <summary>
-/// Тесты культурно-зависимого форматирования размера файла (требование 1.8.3):
+/// Тесты культурно-зависимого форматирования размера файла:
 /// число — по NumberFormatInfo культуры, единицы — передаются из локализованных ресурсов.
 /// </summary>
 public class FileSizeFormatterTests

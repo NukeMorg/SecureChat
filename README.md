@@ -76,7 +76,7 @@ dotnet run --project Server        # http://*:9000, /health → Healthy
 dotnet run --project Client        # WPF-клиент
 dotnet test Tests/SecureChat.Tests.csproj
 ```
-Первый запуск: скопировать `Server/appsettings.Example.json` → `Server/appsettings.json` и `Client/appsettings.Example.json` → `Client/appsettings.json` (конфиги в git не хранятся). SMTP-пароль — только через secrets:
+Конфигурация `appsettings.json` (Client и Server) хранится в репозитории и не содержит секретов. SMTP-пароль — только через secrets:
 ```
 cd Server && dotnet user-secrets set "Smtp:SenderPassword" "..."
 ```
@@ -105,7 +105,7 @@ dotnet publish Client -c Release -r win-x64 --self-contained
 - переводы живут только в ресурсных файлах — добавление языка = копия `Strings.resx` с суффиксом культуры (`Strings.de.resx`) + перевод значений, код не меняется;
 - локаль хранится в полном формате ISO 639 + ISO 3166: **`ru-RU`, `en-US`** (`config.json → Language`), выбор — Вид → Настройки, применяется на лету (`CurrentCulture` + `CurrentUICulture` потока);
 - конвенция семантических ключей: `Menu*` — корневые меню, `Mi*` — пункты меню, `Select*`/`Message*`/`No*` — тексты сообщений и состояний, `Unit*` — единицы измерения;
-- логи и аудит **не локализуются** (всегда English, InvariantCulture, ISO 8601 UTC — требование 1.7.1);
+- логи и аудит **не локализуются** (всегда English, InvariantCulture, ISO 8601 UTC);
 - форматирование данных (даты `g`, числа `N0`, размеры файлов) — только на отображении; на проводе и в БД — ISO 8601 UTC / InvariantCulture.
 
 ## 7. Политики

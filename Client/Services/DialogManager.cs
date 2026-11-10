@@ -7,8 +7,8 @@ namespace SecureChat.Client.Services;
 public class DialogManager
 {
     private readonly CryptoService _crypto;
-    private Dictionary<int, byte[]> _sessionKeys = new();                  // contactId -> AES-сессионный ключ
-    private Dictionary<int, string> _publicKeys = new();                   // contactId -> RSA-публичный ключ (PEM)
+    private readonly Dictionary<int, byte[]> _sessionKeys = new();         // contactId -> AES-сессионный ключ
+    private readonly Dictionary<int, string> _publicKeys = new();          // contactId -> RSA-публичный ключ (PEM)
 
     public DialogManager(CryptoService crypto)
     {

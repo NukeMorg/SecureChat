@@ -9,7 +9,7 @@ using SecureChat.Client.ViewModels;
 namespace SecureChat.Client;
 
 /// <summary>
-/// Настройки (Лаба 8): язык (RU/EN, переключение на лету) и тема.
+/// Настройки: язык (RU/EN, переключение на лету) и тема.
 /// Окно строится кодом в стиле существующих диалогов (тема через DynamicResource);
 /// состояние выбора — в <see cref="SettingsViewModel"/>.
 /// </summary>

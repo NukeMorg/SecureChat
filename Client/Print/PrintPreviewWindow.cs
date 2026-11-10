@@ -10,7 +10,7 @@ using System.Windows.Xps;
 namespace SecureChat.Client.Print;
 
 /// <summary>
-/// Предпросмотр печати: FlowDocument в просмотрщике + кнопка печати (требование 1.6).
+/// Предпросмотр печати: FlowDocument в просмотрщике + кнопка печати.
 /// </summary>
 public class PrintPreviewWindow : Window
 {

@@ -3,7 +3,7 @@ using System.Text;
 namespace SecureChat.Core;
 
 /// <summary>
-/// Требование 1.4.2: NFC-нормализация (NormalizationForm.FormC) выполняется
+/// NFC-нормализация (NormalizationForm.FormC) выполняется
 /// на клиенте перед шифрованием, чтобы одинаковый видимый текст всегда
 /// давал одинаковый шифртекст и корректный клиентский поиск.
 /// </summary>

@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace SecureChat.Core;
 
 /// <summary>
-/// Серверная валидация входных данных (требования 1.1.1, 1.4.2).
+/// Серверная валидация входных данных.
 /// Клиентская валидация — только UX; сервер проверяет всё сам.
 /// Регулярные выражения — с RegexOptions.NonBacktracking (защита от ReDoS).
 /// </summary>
@@ -24,7 +24,7 @@ public static partial class Validators
         && email.Length <= MaxEmailLength
         && EmailRegex().IsMatch(email);
 
-    /// <summary>Пароль: минимум 8 символов, хотя бы 1 буква и 1 цифра (требование 1.1.1).</summary>
+    /// <summary>Пароль: минимум 8 символов, хотя бы 1 буква и 1 цифра.</summary>
     public static bool IsValidPassword(string? password) =>
         !string.IsNullOrEmpty(password)
         && password.Length >= MinPasswordLength
@@ -38,7 +38,7 @@ public static partial class Validators
         && !HasControlCharacters(userName);
 
     /// <summary>
-    /// Управляющие символы запрещены, кроме \n и \t (требование 1.4.2).
+    /// Управляющие символы запрещены, кроме \n и \t.
     /// </summary>
     public static bool HasControlCharacters(string text)
     {

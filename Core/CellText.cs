@@ -1,7 +1,7 @@
 namespace SecureChat.Core;
 
 /// <summary>
-/// Защита от formula injection в Excel (требование 1.5.1): текст, начинающийся
+/// Защита от formula injection в Excel: текст, начинающийся
 /// с =, +, -, @, \t, \r, выписывается с префиксом ' — Excel трактует его как строку.
 /// </summary>
 public static class CellText

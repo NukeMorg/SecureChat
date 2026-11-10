@@ -32,7 +32,7 @@ public partial class MainViewModel : ObservableObject
     // ----- Состояние чатов -----
     private readonly ObservableCollection<ContactItem> _contacts = new();
     private readonly Dictionary<int, ObservableCollection<DialogMessage>> _allDialogs = new();
-    private ICollectionView _contactsView;
+    private ICollectionView _contactsView = null!;
 
     private readonly ObservableCollection<ChannelItem> _channels = new();
     private readonly ChannelCrypto _channelCrypto = new();
@@ -62,10 +62,10 @@ public partial class MainViewModel : ObservableObject
     private int _currentContactId = -1;
     private Dictionary<int, string> _contactPublicKeys = new();
 
-    // Reply (Фаза D): цель ответа — применяется к текущему диалогу/каналу
+    // Reply: цель ответа — применяется к текущему диалогу/каналу
     private string? _replyToMessageId;
 
-    // Edit (Фаза D): редактируемое сообщение (только Direct, окно 15 минут на сервере)
+    // Edit: редактируемое сообщение (только Direct, окно 15 минут на сервере)
     private string? _editingMessageId;
 
     /// <summary>Канал, ротация которого уже выполнена вручную (чтобы не сработать дважды на то же событие).</summary>
@@ -98,9 +98,6 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _isChatSearchVisible;
     [ObservableProperty] private string _chatSearchQuery = "";
     [ObservableProperty] private string _chatSearchCount = "";
-
-    /// <summary>Сообщение, по которому открыт контекстное меню / строка выделена.</summary>
-    public DialogMessage? SelectedMessageRow => SelectedMessage as DialogMessage;
 
     /// <summary>Имя текущего пользователя (для печати в представлении).</summary>
     public string UserName => _userName;
@@ -207,7 +204,7 @@ public partial class MainViewModel : ObservableObject
     private static void RunOnUi(Action action) =>
         Application.Current.Dispatcher.Invoke(action);
 
-    /// <summary>Нейтральные тексты ошибок сервера: без стектрейсов и внутренних деталей (требование 1.4.3).</summary>
+    /// <summary>Нейтральные тексты ошибок сервера: без стектрейсов и внутренних деталей.</summary>
     private static string MapErrorText(string errorCode) => errorCode switch
     {
         "MessageRejected" => "Сообщение отклонено сервером: проверьте размер и формат.",
@@ -246,7 +243,7 @@ public partial class MainViewModel : ObservableObject
         _ => "ошибка сервера."
     };
 
-    /// <summary>Глифы статусов доставки: Sent → Delivered → Read (требование 1.2.5).</summary>
+    /// <summary>Глифы статусов доставки: Sent → Delivered → Read.</summary>
     private static string MapStatusGlyph(string status) => status switch
     {
         "Sent" => "✓",
@@ -256,7 +253,7 @@ public partial class MainViewModel : ObservableObject
         _ => status
     };
 
-    /// <summary>Размер файла: число по CurrentCulture, единицы — из локализованных ресурсов (требование 1.8.3).</summary>
+    /// <summary>Размер файла: число по CurrentCulture, единицы — из локализованных ресурсов.</summary>
     private static string FormatFileSize(long bytes) =>
         FileSizeFormatter.Format(bytes,
             LocalizationSource.Get("UnitBytes"),
@@ -621,7 +618,7 @@ public partial class MainViewModel : ObservableObject
         window.Show();
     }
 
-    // ---------- Каналы: список, создание, участники, ротация ключа (Фаза C) ----------
+    // ---------- Каналы: список, создание, участники, ротация ключа  ----------
 
     private async Task RefreshChannelsAsync()
     {
@@ -718,7 +715,7 @@ public partial class MainViewModel : ObservableObject
         var channel = _channels.FirstOrDefault(c => c.Id == p.ChannelId);
         await RefreshChannelsAsync();
 
-        // forward secrecy при бане/удалении: Owner канала ротирует ключ (требование 1.2.7).
+        // forward secrecy при бане/удалении: Owner канала ротирует ключ.
         // При ручном удалении ротацию уже выполнил действующий HR/Admin — пропускаем.
         if (channel != null && channel.OwnerId == _clientId &&
             _rotationDoneForRemovedEvent != p.ChannelId)
@@ -954,7 +951,7 @@ public partial class MainViewModel : ObservableObject
                 if (_allChannelMessages.TryGetValue(msg.ChannelId, out var chanCol))
                     ApplyReplyPreview(dm, chanCol);
 
-                // упоминание @ник (требование 1.2.4): подсветка в имени отправителя
+                // упоминание @ник: подсветка в имени отправителя
                 if (dm.Text.Contains("@" + _userName, StringComparison.OrdinalIgnoreCase))
                     dm.SenderName = "🔔 " + (dm.SenderName == "" ? _userName : dm.SenderName);
 
@@ -1138,7 +1135,7 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    // ---------- Reply (Фаза D) ----------
+    // ---------- Reply ----------
 
     /// <summary>Цитата строится локально: сервер не видит plaintext (E2E).</summary>
     private void ApplyReplyPreview(DialogMessage dm, IEnumerable<DialogMessage> collection)
@@ -1245,7 +1242,7 @@ public partial class MainViewModel : ObservableObject
         ClearReply();
     }
 
-    // ---------- Edit / Delete (Фаза D) ----------
+    // ---------- Edit / Delete ----------
 
     [RelayCommand]
     private void EditMessage()
@@ -1359,7 +1356,7 @@ public partial class MainViewModel : ObservableObject
             CollectionViewSource.GetDefaultView(CurrentMessages).Refresh();
     }
 
-    // ---------- Поиск по выбранному чату (Фаза D, строка поиска) ----------
+    // ---------- Поиск по выбранному чату (строка поиска) ----------
 
     /// <summary>Ctrl+F: показать/скрыть строку поиска в текущем чате.</summary>
     [RelayCommand]
@@ -1439,7 +1436,7 @@ public partial class MainViewModel : ObservableObject
         ChatSearchCount = $"{index + 1}/{_chatSearchMatches.Count}";
     }
 
-    // ---------- Экспорт текущего чата (Лаба 3, только клиент) ----------
+    // ---------- Экспорт текущего чата (только клиент) ----------
 
     /// <summary>Строки текущего чата для экспорта: расшифрованные текстовые сообщения.</summary>
     public List<ChatExportRow>? CollectCurrentChatRows()
@@ -2004,7 +2001,7 @@ public partial class MainViewModel : ObservableObject
             _dialogs.ShowInfo(LocalizationSource.Get("SelectRecipient"), LocalizationSource.Get("Info"));
             return;
         }
-        // NFC-нормализация до шифрования (требование 1.4.2)
+        // NFC-нормализация до шифрования
         string text = TextNormalizer.NormalizeToNfc(MessageText.Trim());
         if (string.IsNullOrEmpty(text)) return;
         if (text.Length > 4000)

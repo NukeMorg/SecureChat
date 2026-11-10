@@ -166,7 +166,7 @@ public class NetworkService
     public Task<AuditLogResponsePayload?> GetAuditLogAsync(GetAuditLogPayload payload) =>
         InvokeWithResultAsync<AuditLogResponsePayload>("GetAuditLog", payload);
 
-    // ---------- Каналы (Фаза C) ----------
+    // ---------- Каналы ----------
 
     public Task<CreateChannelResponsePayload?> CreateChannelAsync(CreateChannelPayload payload) =>
         InvokeWithResultAsync<CreateChannelResponsePayload>("CreateChannel", payload);
@@ -201,7 +201,7 @@ public class NetworkService
     public Task<ChannelHistoryResponsePayload?> GetChannelHistoryAsync(GetChannelHistoryPayload payload) =>
         InvokeWithResultAsync<ChannelHistoryResponsePayload>("GetChannelHistory", payload);
 
-    // ---------- Редактирование и удаление (Фаза D) ----------
+    // ---------- Редактирование и удаление ----------
 
     public Task<SimpleStatusPayload?> EditMessageAsync(EditMessagePayload payload) =>
         InvokeWithResultAsync("EditMessage", payload);

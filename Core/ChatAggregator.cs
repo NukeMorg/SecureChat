@@ -28,7 +28,7 @@ public interface IStatsRenderer
 }
 
 /// <summary>
-/// Агрегатор чата (требование 1.5.3): единственный расчёт статистики,
+/// Агрегатор чата: единственный расчёт статистики,
 /// результаты рендерятся IStatsRenderer-ами. Лимит — 50 000 строк.
 /// </summary>
 public static class ChatAggregator

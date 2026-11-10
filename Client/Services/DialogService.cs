@@ -34,23 +34,33 @@ public interface IDialogService
     string? PickSaveFile(string title, string filter, string fileName);
 }
 
-/// <summary>Реализация <see cref="IDialogService"/> поверх System.Windows.MessageBox.</summary>
+/// <summary>Реализация <see cref="IDialogService"/> поверх System.Windows.MessageBox.
+/// Все вызовы маршируются на поток UI — безопасны из обработчиков сетевых событий.</summary>
 public sealed class DialogService : IDialogService
 {
+    private static void Ui(Action action) => Ui<object?>(() => { action(); return null; });
+
+    private static T Ui<T>(Func<T> func)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess()) return func();
+        return dispatcher.Invoke(func);
+    }
+
     public void ShowInfo(string message, string title = "Информация") =>
-        MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Information);
+        Ui(() => MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Information));
 
     public void ShowWarning(string message, string title = "Внимание") =>
-        MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        Ui(() => MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Warning));
 
     public void ShowError(string message, string title = "Ошибка") =>
-        MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error);
+        Ui(() => MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error));
 
     public bool Confirm(string message, string title = "Подтверждение") =>
-        MessageBox.Show(message, title, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+        Ui(() => MessageBox.Show(message, title, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes);
 
     public bool ConfirmWarning(string message, string title = "Подтверждение") =>
-        MessageBox.Show(message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
+        Ui(() => MessageBox.Show(message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes);
 
     public string? Prompt(string title, string defaultText = "")
     {

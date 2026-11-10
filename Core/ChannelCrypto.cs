@@ -5,7 +5,7 @@ using System.Text;
 namespace SecureChat.Core;
 
 /// <summary>
-/// Групповая криптография каналов (Фаза C, требование 1.2.7).
+/// Групповая криптография каналов.
 /// GroupKey (32 байта CSPRNG) существует только здесь и у других участников;
 /// сервер видит лишь шифртекст и зашифрованные RSA-копии ключа.
 ///
@@ -121,7 +121,7 @@ public class ChannelCrypto
         {
             if (!_groupKeys.TryGetValue(channelId, out var groupKey)) return null;
 
-            // replay-защита строго по курсору: итерация позади обработанной — reject (требование 1.2.7)
+            // replay-защита строго по курсору: итерация позади обработанной — reject
             var state = GetOrInitRatchet(channelId, senderId, groupKey);
             if (iteration < state.NextIteration) return null;
             if (iteration - state.NextIteration > MaxCatchUpIterations) return null;

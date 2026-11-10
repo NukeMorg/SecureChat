@@ -7,7 +7,7 @@ using Xunit;
 namespace SecureChat.Tests;
 
 /// <summary>
-/// Round-trip тесты экспорта (требование 1.5): один ChatStats → Excel и Word,
+/// Round-trip тесты экспорта: один ChatStats → Excel и Word,
 /// агрегаты в файлах идентичны расчёту; formula injection обезврежен.
 /// </summary>
 public class ExportRoundTripTests : IDisposable

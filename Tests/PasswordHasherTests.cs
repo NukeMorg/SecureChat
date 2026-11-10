@@ -4,7 +4,7 @@ using Xunit;
 
 namespace SecureChat.Tests;
 
-/// <summary>Негативные security-тесты хэширования паролей (Фаза A, BCrypt cost 12).</summary>
+/// <summary>Негативные security-тесты хэширования паролей (BCrypt cost 12).</summary>
 public class PasswordHasherTests
 {
     [Fact]

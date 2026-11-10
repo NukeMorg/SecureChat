@@ -145,7 +145,7 @@ public class Database
     }
 
     /// <summary>
-    /// Миграция v1 (Фаза B): роли Admin/HR/Employee, блокировка, статус, аватар,
+    /// Миграция v1: роли Admin/HR/Employee, блокировка, статус, аватар,
     /// таблица AuditLog (append-only — триггеры запрещают UPDATE/DELETE).
     /// </summary>
     private void ApplyV1(SqliteConnection conn)
@@ -189,7 +189,7 @@ public class Database
     }
 
     /// <summary>
-    /// Миграция v2 (Фаза C): каналы с E2E-групповым ключом.
+    /// Миграция v2: каналы с E2E-групповым ключом.
     /// GroupKey хранится только в зашифрованном виде (RSA 1-1 каждого участника).
     /// </summary>
     private void ApplyV2(SqliteConnection conn)
@@ -501,7 +501,7 @@ public class Database
         return result != null ? Convert.ToInt32(result) : null;
     }
 
-    /// <summary>Logout: удаление сессии по требованию 1.1.2.</summary>
+    /// <summary>Logout: удаление сессии.</summary>
     public void RevokeSession(string token)
     {
         using var conn = new SqliteConnection(cs);
@@ -531,7 +531,7 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    // ---------- Роли, профиль, блокировка (Фаза B) ----------
+    // ---------- Роли, профиль, блокировка ----------
 
     public string GetUserRole(int userId)
     {
@@ -647,7 +647,7 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    // ---------- Аудит (Фаза B, требование 1.7.3) ----------
+    // ---------- Аудит ----------
 
     public void WriteAudit(int? actorId, string action, int? targetId, string result, string ip, string userAgent = "")
     {
@@ -827,7 +827,7 @@ public class Database
             reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetString(3));
     }
 
-    /// <summary>Редактирование: новый шифртекст + маркер IsEdited (требование 1.2.2).</summary>
+    /// <summary>Редактирование: новый шифртекст + маркер IsEdited.</summary>
     public void UpdateMessageContent(string messageId, string nonce, string ciphertext, string tag)
     {
         using var conn = new SqliteConnection(cs);
@@ -846,7 +846,7 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    /// <summary>Soft-delete: DeletedAt, шифртекст сохраняется (требование 1.2.2).</summary>
+    /// <summary>Soft-delete: DeletedAt, шифртекст сохраняется.</summary>
     public void SoftDeleteMessage(string messageId)
     {
         using var conn = new SqliteConnection(cs);
@@ -1014,7 +1014,7 @@ public class Database
         return ids;
     }
 
-    // ---------- Каналы (Фаза C) ----------
+    // ---------- Каналы ----------
 
     /// <summary>Создание канала; возвращает null, если имя занято.</summary>
     public string? CreateChannel(string name, int ownerId)

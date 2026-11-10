@@ -265,7 +265,7 @@ public class ChatHub : Hub
 
         int adminId = UserId!.Value;
         _db.SetUserActive(p.TargetId, false);
-        _db.RevokeAllUserSessions(p.TargetId); // требование 1.1.5: отзыв сессий при бане
+        _db.RevokeAllUserSessions(p.TargetId); // отзыв сессий при бане
 
         foreach (var connId in _registry.GetConnections(p.TargetId))
         {
@@ -273,7 +273,7 @@ public class ChatHub : Hub
             await Clients.Client(connId).SendAsync("Banned", new BannedPayload { Reason = p.Reason });
         }
 
-        // требование 1.1.5/1.2.7: при бане — удаление из каналов;
+        // при бане — удаление из каналов;
         // Owner каждого канала выполнит ротацию GroupKey по событию ChannelMemberRemoved
         foreach (var channelId in _db.DeleteUserFromAllChannels(p.TargetId))
         {
@@ -327,7 +327,7 @@ public class ChatHub : Hub
         return Task.FromResult(new SimpleStatusPayload { Status = "Ok" });
     }
 
-    /// <summary>Смена пароля: проверка текущего, отзыв всех сессий (требование 1.1.4).</summary>
+    /// <summary>Смена пароля: проверка текущего, отзыв всех сессий.</summary>
     public async Task<SimpleStatusPayload> ChangePassword(ChangePasswordPayload? p)
     {
         if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
@@ -351,7 +351,7 @@ public class ChatHub : Hub
         return new SimpleStatusPayload { Status = "Ok" };
     }
 
-    // ---------- Профиль: статус и аватар (требование 1.1.4) ----------
+    // ---------- Профиль: статус и аватар ----------
 
     public Task<SimpleStatusPayload> UpdateStatus(UpdateStatusPayload? p)
     {
@@ -426,7 +426,7 @@ public class ChatHub : Hub
         });
     }
 
-    // ---------- Аудит (просмотр только Admin, требование 1.1.3) ----------
+    // ---------- Аудит (просмотр только Admin) ----------
 
     public Task<AuditLogResponsePayload?> GetAuditLog(GetAuditLogPayload? p)
     {
@@ -442,7 +442,7 @@ public class ChatHub : Hub
         });
     }
 
-    // ---------- Каналы (Фаза C) ----------
+    // ---------- Каналы ----------
 
     private bool IsManagerOrAdmin() => Role() is "Admin" or "Manager";
 
@@ -744,7 +744,7 @@ public class ChatHub : Hub
     public async Task Ack(AckPayload? p)
     {
         if (UserId == null || p == null) return;
-        // Delivered — при получении, Read — при открытии чата (требование 1.2.5)
+        // Delivered — при получении, Read — при открытии чата
         if (p.Status != "Delivered" && p.Status != "Read") return;
 
         _db.UpdateMessageStatus(p.MessageId, p.Status);
@@ -774,7 +774,7 @@ public class ChatHub : Hub
         });
     }
 
-    // ---------- Редактирование и удаление (Фаза D, требование 1.2.2) ----------
+    // ---------- Редактирование и удаление ----------
 
     public async Task<SimpleStatusPayload> EditMessage(EditMessagePayload? p)
     {

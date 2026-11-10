@@ -3,7 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 namespace SecureChat.Client.ViewModels;
 
 /// <summary>
-/// ViewModel настроек (Лаба 8): язык (RU/EN, переключение на лету) и тема.
+/// ViewModel настроек: язык (RU/EN, переключение на лету) и тема.
 /// Применение — через статические App.ApplyLanguage/App.ApplyTheme.
 /// </summary>
 public partial class SettingsViewModel : ObservableObject

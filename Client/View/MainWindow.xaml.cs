@@ -63,7 +63,7 @@ public partial class MainWindow : Window
         }
     }
 
-    // ---------- Печать чата (Лаба 4): view-специфичный поток печати ----------
+    // ---------- Печать чата: view-специфичный поток печати ----------
 
     private void PrintChat_Click(object sender, RoutedEventArgs e)
     {

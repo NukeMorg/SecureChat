@@ -343,7 +343,7 @@ public class MessageDeletedPayload
 }
 
 /// <summary>
-/// Запись журнала аудита (требование 1.7.3). Action/Result — English-константы.
+/// Запись журнала аудита. Action/Result — English-константы.
 /// </summary>
 public class AuditLogEntry
 {
@@ -400,7 +400,7 @@ public class ChangePasswordPayload
 }
 
 /// <summary>
-/// Обновление статуса пользователя (≤ 100 символов, требование 1.1.4).
+/// Обновление статуса пользователя (≤ 100 символов).
 /// </summary>
 public class UpdateStatusPayload
 {
@@ -424,7 +424,7 @@ public class GetUserProfilePayload
 }
 
 /// <summary>
-/// Профиль пользователя: публичные данные (требование 1.1.4).
+/// Профиль пользователя: публичные данные.
 /// </summary>
 public class UserProfileDto
 {

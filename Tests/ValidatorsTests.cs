@@ -3,7 +3,7 @@ using Xunit;
 
 namespace SecureChat.Tests;
 
-/// <summary>Тесты валидаторов (Лаба 2): email, пароль, имя, управляющие символы.</summary>
+/// <summary>Тесты валидаторов: email, пароль, имя, управляющие символы.</summary>
 public class ValidatorsTests
 {
     [Theory]
@@ -78,7 +78,7 @@ public class ValidatorsTests
     }
 }
 
-/// <summary>Тесты маскирования PII (требование 1.7.2).</summary>
+/// <summary>Тесты маскирования PII.</summary>
 public class PiiMaskerTests
 {
     [Fact]
@@ -123,7 +123,7 @@ public class PiiMaskerTests
         Assert.Equal("", SecureChat.Security.PiiMasker.Token(""));
 }
 
-/// <summary>Тесты агрегатора (требование 1.5.3): один расчёт для Excel и Word.</summary>
+/// <summary>Тесты агрегатора: один расчёт для Excel и Word.</summary>
 public class ChatAggregatorTests
 {
     private static ChatExportRow Row(string sender, string text, int hour) =>
@@ -167,7 +167,7 @@ public class ChatAggregatorTests
     }
 }
 
-/// <summary>Formula injection и имена файлов (требования 1.5.1).</summary>
+/// <summary>Formula injection и имена файлов.</summary>
 public class SanitizerTests
 {
     [Theory]
