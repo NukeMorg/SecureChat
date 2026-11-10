@@ -111,7 +111,11 @@ public partial class MainWindow : Window
 
         _network.OnIncomingMessage += OnIncomingMessage;
         _network.OnDeliveryStatus += OnDeliveryStatus;
-        _network.OnConnected += () => Dispatcher.Invoke(() => UpdateConnectionStatus(true));
+        _network.OnConnected += () => Dispatcher.Invoke(async () =>
+        {
+            UpdateConnectionStatus(true);
+            await RefreshChannelsAsync();
+        });
         _network.OnDisconnected += () => Dispatcher.Invoke(() => UpdateConnectionStatus(false));
         _network.OnError += err =>
         {
@@ -151,7 +155,11 @@ public partial class MainWindow : Window
         UpdateTitleAndStatus();
         Log.Information("MainWindow opened userId={UserId}", _clientId);
 
-        this.Loaded += async (s, e) => { await _network.GetContactsAsync(); };
+        this.Loaded += async (s, e) =>
+        {
+            await _network.GetContactsAsync();
+            await RefreshChannelsAsync();
+        };
     }
 
     /// <summary>Нейтральные тексты ошибок сервера: без стектрейсов и внутренних деталей (требование 1.4.3).</summary>
@@ -591,14 +599,38 @@ public partial class MainWindow : Window
 
     private async void CreateChannel_Click(object sender, RoutedEventArgs e)
     {
-        string? name = ShowInputDialog("Название канала (1–100 символов)", "");
-        if (string.IsNullOrWhiteSpace(name)) return;
+        var dialog = new ChannelCreationWindow(_contacts) { Owner = this };
+        if (dialog.ShowDialog() != true) return;
+
+        string name = dialog.ChannelName;
+        var selectedMembers = dialog.SelectedMemberIds;
 
         var resp = await _network.CreateChannelAsync(new CreateChannelPayload { Name = name });
         if (resp?.Status == "Ok")
         {
-            // Owner генерирует GroupKey локально; доставки другим не нужны (участников пока нет)
+            // Owner генерирует GroupKey локально
             _channelCrypto.SetGroupKey(resp.ChannelId, _crypto.GenerateSessionKey());
+
+            // Добавляем выбранных участников
+            foreach (int memberId in selectedMembers)
+            {
+                var addResp = await _network.AddChannelMemberAsync(new AddChannelMemberPayload
+                {
+                    ChannelId = resp.ChannelId,
+                    UserId = memberId
+                });
+                if (addResp?.Status != "Ok")
+                {
+                    Log.Warning("Failed to add member {UserId} to new channel {ChannelId}: {Status}",
+                        memberId, resp.ChannelId, addResp?.Status);
+                }
+            }
+
+            if (selectedMembers.Count > 0)
+            {
+                await RotateChannelKeyAsync(resp.ChannelId);
+            }
+
             await RefreshChannelsAsync();
             var created = _channels.FirstOrDefault(c => c.Id == resp.ChannelId);
             if (created != null) ContactsListBox.SelectedItem = created;
