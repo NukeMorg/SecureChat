@@ -49,6 +49,7 @@ public partial class MainViewModel : ObservableObject
     private readonly DialogManager _dialogManager;
     private readonly FileTransferManager _fileTransfer;
     private readonly IDialogService _dialogs;
+    private readonly IWindowFactory _windows;
 
     // ----- Сессия -----
     private readonly int _clientId;
@@ -108,8 +109,10 @@ public partial class MainViewModel : ObservableObject
     public event EventHandler<DialogMessage>? ScrollToMessageRequested;
 
     public MainViewModel(int clientId, string userName, string token, string serverAddress,
-        string publicKeyPem, string privateKeyPem, string role, NetworkService network, IDialogService dialogs)
+        string publicKeyPem, string privateKeyPem, string role, NetworkService network,
+        IDialogService dialogs, IWindowFactory windows)
     {
+        _windows = windows;
         _clientId = clientId;
         _userName = userName;
         _token = token;
@@ -400,11 +403,11 @@ public partial class MainViewModel : ObservableObject
 
         try
         {
-            var loginWindow = new SecureChat.Client.View.LoginWindow();
+            var loginWindow = _windows.CreateLogin();
             bool? res = loginWindow.ShowDialog();
             if (res == true && loginWindow.AuthenticatedUserId > 0)
             {
-                var nextMain = new SecureChat.Client.MainWindow(
+                var nextMain = _windows.CreateMain(
                     loginWindow.AuthenticatedUserId, loginWindow.AuthenticatedUserName,
                     loginWindow.Token, loginWindow.ServerUrl,
                     loginWindow.PublicKeyPem, loginWindow.PrivateKeyPem,
@@ -518,15 +521,13 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void OpenSettings()
     {
-        var settings = new SecureChat.Client.SettingsWindow { Owner = Application.Current.MainWindow };
-        settings.ShowDialog();
+        _windows.CreateSettings().ShowDialog();
     }
 
     [RelayCommand]
     private void OpenAuditLog()
     {
-        var window = new SecureChat.Client.View.AuditLogWindow(_network) { Owner = Application.Current.MainWindow };
-        window.Show();
+        _windows.CreateAuditLog(_network).Show();
     }
 
     // ---------- Смена пароля ----------
@@ -534,7 +535,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task ChangePasswordAsync()
     {
-        var dlg = new SecureChat.Client.View.PasswordDialog { Owner = Application.Current.MainWindow };
+        var dlg = _windows.CreatePasswordDialog();
         if (dlg.ShowDialog() != true) return;
 
         var resp = await _network.ChangePasswordAsync(new ChangePasswordPayload
@@ -614,8 +615,7 @@ public partial class MainViewModel : ObservableObject
             _dialogs.ShowInfo("Профиль недоступен: пользователь не найден среди ваших контактов.", "Профиль");
             return;
         }
-        var window = new SecureChat.Client.View.ProfileWindow(profile) { Owner = Application.Current.MainWindow };
-        window.Show();
+        _windows.CreateProfile(profile).Show();
     }
 
     // ---------- Каналы: список, создание, участники, ротация ключа  ----------
@@ -644,7 +644,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task CreateChannelAsync()
     {
-        var dialog = new SecureChat.Client.View.ChannelCreationWindow(_contacts) { Owner = Application.Current.MainWindow };
+        var dialog = _windows.CreateChannelCreation(_contacts);
         if (dialog.ShowDialog() != true) return;
 
         string name = dialog.ChannelName;
@@ -1590,9 +1590,7 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void ShowHelpGuide()
     {
-        var help = new SecureChat.Client.HelpWindow();
-        help.Owner = Application.Current.MainWindow;
-        help.Show();
+        _windows.CreateHelp().Show();
     }
 
     // ---------- События профиля контактов ----------

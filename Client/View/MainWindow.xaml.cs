@@ -13,6 +13,7 @@ using Size = System.Windows.Size;
 using SecureChat.Client.Models;
 using SecureChat.Client.Print;
 using SecureChat.Client.Services;
+using SecureChat.Client.View;
 using SecureChat.Client.ViewModels;
 using SecureChat.Core;
 using Serilog;
@@ -35,7 +36,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _vm = new MainViewModel(clientId, userName, token, serverAddress, publicKeyPem, privateKeyPem, role,
-            network, new DialogService());
+            network, new DialogService(), new WindowFactory());
         DataContext = _vm;
 
         _vm.FocusMessageRequested += (_, _) => MessageTextBox.Focus();
