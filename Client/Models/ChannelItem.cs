@@ -26,7 +26,7 @@ public class ChannelItem : INotifyPropertyChanged
         set { _subtitle = value; OnPropertyChanged(nameof(Subtitle)); }
     }
 
-    // Непрочитанные сообщения канала (Фаза D)
+    // Непрочитанные сообщения канала
     private int _unreadCount;
     public int UnreadCount
     {

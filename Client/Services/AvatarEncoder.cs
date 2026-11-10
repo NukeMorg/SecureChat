@@ -5,7 +5,7 @@ namespace SecureChat.Client.Services;
 
 /// <summary>
 /// Подготовка аватара: любой поддерживаемый WPF формат (PNG/JPEG/BMP)
-/// декодируется и перекодируется в PNG (требование 1.1.4: "PNG после re-encode").
+/// декодируется и перекодируется в PNG.
 /// Сервер принимает только PNG ≤ 2 МБ (проверка магических байт).
 /// </summary>
 public static class AvatarEncoder

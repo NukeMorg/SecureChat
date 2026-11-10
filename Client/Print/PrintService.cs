@@ -13,7 +13,7 @@ using SecureChat.Core;
 namespace SecureChat.Client.Print;
 
 /// <summary>
-/// Печать чата (требование 1.6, только клиент): FlowDocument + PrintDialog.
+/// Печать чата (только клиент): FlowDocument + PrintDialog.
 /// Шапка (чат, дата, участник), тело (сообщения), номера страниц через обёртку пагинатора.
 /// </summary>
 public class PrintService

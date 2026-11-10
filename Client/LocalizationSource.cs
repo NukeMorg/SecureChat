@@ -5,7 +5,7 @@ using System.Resources;
 namespace SecureChat.Client;
 
 /// <summary>
-/// Источник локализованных строк (требование 1.8): ResourceManager по CurrentUICulture.
+/// Источник локализованных строк: ResourceManager по CurrentUICulture.
 /// XAML: {Binding [KeyName], Source={StaticResource Loc}} — обновление на лету через Refresh().
 /// Код: Strings.Get("KeyName").
 /// </summary>

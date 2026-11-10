@@ -20,19 +20,21 @@
         <TextBox x:Name="ChannelNameTextBox" Grid.Row="1" Height="28" Margin="0,4,0,12" Padding="6,4"
                  Background="{DynamicResource InputAreaBackground}"
                  Foreground="{DynamicResource ForegroundColor}"
-                 BorderBrush="{DynamicResource StatusForeground}"/>
+                 BorderBrush="{DynamicResource StatusForeground}"
+                 Text="{Binding ChannelName, UpdateSourceTrigger=PropertyChanged}"/>
 
         <TextBlock Grid.Row="2" Text="Участники (выберите из списка или найдите по имени/ID):" FontSize="12" Foreground="{DynamicResource StatusForeground}"/>
         <TextBox x:Name="SearchBox" Grid.Row="3" Height="26" Margin="0,4,0,8" Padding="6,3"
                  Background="{DynamicResource InputAreaBackground}"
                  Foreground="{DynamicResource ForegroundColor}"
                  BorderBrush="{DynamicResource StatusForeground}"
-                 TextChanged="SearchBox_TextChanged"/>
+                 Text="{Binding SearchQuery, UpdateSourceTrigger=PropertyChanged}"/>
 
         <ListBox x:Name="ParticipantsListBox" Grid.Row="4" Margin="0,0,0,16"
                  Background="{DynamicResource InputAreaBackground}"
                  Foreground="{DynamicResource ForegroundColor}"
-                 BorderBrush="{DynamicResource StatusForeground}">
+                 BorderBrush="{DynamicResource StatusForeground}"
+                 ItemsSource="{Binding ItemsView}">
             <ListBox.ItemTemplate>
                 <DataTemplate>
                     <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
@@ -44,9 +46,9 @@
         </ListBox>
 
         <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Content="Создать" Width="90" Height="28" Margin="0,0,8,0" Click="Ok_Click"
+            <Button Content="Создать" Width="90" Height="28" Margin="0,0,8,0" Command="{Binding ConfirmCommand}"
                     Background="#FF1E88E5" Foreground="White" BorderThickness="0"/>
-            <Button Content="Отмена" Width="90" Height="28" Click="Cancel_Click"
+            <Button Content="Отмена" Width="90" Height="28" Command="{Binding CancelCommand}"
                     Background="{DynamicResource InputAreaBackground}"
                     Foreground="{DynamicResource ForegroundColor}"/>
         </StackPanel>

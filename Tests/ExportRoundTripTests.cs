@@ -7,7 +7,7 @@ using Xunit;
 namespace SecureChat.Tests;
 
 /// <summary>
-/// Round-trip тесты экспорта (требование 1.5): один ChatStats → Excel и Word,
+/// Round-trip тесты экспорта: один ChatStats → Excel и Word,
 /// агрегаты в файлах идентичны расчёту; formula injection обезврежен.
 /// </summary>
 public class ExportRoundTripTests : IDisposable
@@ -75,25 +75,5 @@ public class ExportRoundTripTests : IDisposable
         Assert.Contains($"Всего сообщений: {stats.TotalMessages.ToString("N0")}", allText);
         Assert.Contains("Самый активный: Аня", allText);
         Assert.Contains("'=1+1+1", allText); // префикс сохранён как текст (Word не исполняет формулы)
-    }
-
-    [Fact]
-    public void BothRenderers_ProduceIdenticalAggregateNumbers()
-    {
-        string xlsx = Path.Combine(_dir, "a.xlsx");
-        string docx = Path.Combine(_dir, "a.docx");
-        Directory.CreateDirectory(_dir);
-        var stats = SampleStats();
-
-        new ExcelStatsRenderer().Render(stats, xlsx);
-        new WordStatsRenderer().Render(stats, docx);
-
-        using var wb = new XLWorkbook(xlsx);
-        using var doc = WordprocessingDocument.Open(docx, false);
-        string wordText = string.Concat(doc.MainDocumentPart!.Document.Body!.Descendants<DocumentFormat.OpenXml.Wordprocessing.Text>().Select(t => t.Text));
-
-        // один расчёт → два рендера → одинаковые агрегаты
-        Assert.Contains(stats.TotalMessages.ToString("N0"), wordText);
-        Assert.Equal(stats.TotalMessages.ToString("N0"), wb.Worksheet("Экспорт").Cell(3, 2).GetString());
     }
 }

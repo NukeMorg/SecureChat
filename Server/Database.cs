@@ -10,7 +10,7 @@ using ILogger = Serilog.ILogger;
 
 namespace SecureChat.Server;
 
-public class Database
+public class Database : IDatabase
 {
     private readonly string cs;
     public string ConnectionString => cs;
@@ -51,14 +51,6 @@ public class Database
                 Email TEXT PRIMARY KEY,
                 Code TEXT NOT NULL,
                 ExpiresAt TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS Sessions (
-                Token TEXT PRIMARY KEY,
-                UserId INTEGER NOT NULL,
-                CreatedAt TEXT NOT NULL,
-                ExpiresAt TEXT,
-                IsRevoked INTEGER NOT NULL DEFAULT 0,
-                FOREIGN KEY (UserId) REFERENCES Clients(Id)
             );
             CREATE TABLE IF NOT EXISTS Messages (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,8 +123,12 @@ public class Database
         {
             ApplyV3(conn); // роль HR переименована в Manager (данные + протокол)
         }
+        if (version < 4)
+        {
+            ApplyV4(conn); // сессии: plaintext-токены → JWT (ключ jti)
+        }
 
-        SetUserVersion(conn, Math.Max(version, 3));
+        SetUserVersion(conn, Math.Max(version, 4));
     }
 
     /// <summary>Миграция v3: переименование роли HR → Manager во всех данных.</summary>
@@ -145,7 +141,27 @@ public class Database
     }
 
     /// <summary>
-    /// Миграция v1 (Фаза B): роли Admin/HR/Employee, блокировка, статус, аватар,
+    /// Миграция v4: сессии — plaintext-токены → JWT (первичный ключ jti).
+    /// Все старые сессии недействительны — пользователи входят заново.
+    /// </summary>
+    private void ApplyV4(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+            DROP TABLE IF EXISTS Sessions;
+            CREATE TABLE Sessions (
+                Jti TEXT PRIMARY KEY,
+                UserId INTEGER NOT NULL,
+                CreatedAt TEXT NOT NULL,
+                ExpiresAt TEXT NOT NULL,
+                FOREIGN KEY (UserId) REFERENCES Clients(Id)
+            );";
+        cmd.ExecuteNonQuery();
+        Log.Information("Sessions migrated to JWT (jti) schema");
+    }
+
+    /// <summary>
+    /// Миграция v1: роли Admin/HR/Employee, блокировка, статус, аватар,
     /// таблица AuditLog (append-only — триггеры запрещают UPDATE/DELETE).
     /// </summary>
     private void ApplyV1(SqliteConnection conn)
@@ -189,7 +205,7 @@ public class Database
     }
 
     /// <summary>
-    /// Миграция v2 (Фаза C): каналы с E2E-групповым ключом.
+    /// Миграция v2: каналы с E2E-групповым ключом.
     /// GroupKey хранится только в зашифрованном виде (RSA 1-1 каждого участника).
     /// </summary>
     private void ApplyV2(SqliteConnection conn)
@@ -255,6 +271,14 @@ public class Database
 
     private static bool TryAddColumn(SqliteConnection conn, string table, string column, string type)
     {
+        // таблица может отсутствовать (например, Sessions переезжает в SessionRepository)
+        using (var check = conn.CreateCommand())
+        {
+            check.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=@table";
+            check.Parameters.AddWithValue("@table", table);
+            if ((long)check.ExecuteScalar()! == 0) return false;
+        }
+
         try
         {
             using var cmd = conn.CreateCommand();
@@ -283,8 +307,6 @@ public class Database
         cmd.Parameters.AddWithValue("@expires", DateTime.UtcNow.Add(ttl).ToString("o"));
         cmd.ExecuteNonQuery();
     }
-
-    public enum CodeVerifyResult { Valid, Invalid, Expired }
 
     public CodeVerifyResult VerifyAndConsumeCode(string email, string code)
     {
@@ -387,7 +409,7 @@ public class Database
         return insertCmd.ExecuteNonQuery() > 0;
     }
 
-    public static (string hash, string salt) HashPassword(string password)
+    private static (string hash, string salt) HashPassword(string password)
     {
         // Новые хэши — BCrypt; соль хранится внутри строки хэша.
         return (PasswordHasher.Hash(password), string.Empty);
@@ -405,7 +427,7 @@ public class Database
         Log.Debug("Password hash upgraded to BCrypt for userId={UserId}", userId);
     }
 
-    public (int id, string token)? RegisterUser(string email, string password, string userName, string publicKey)
+    public int? RegisterUser(string email, string password, string userName, string publicKey)
     {
         string normEmail = email.Trim().ToLowerInvariant();
         using var conn = new SqliteConnection(cs);
@@ -429,12 +451,11 @@ public class Database
         insertCmd.Parameters.AddWithValue("@key", publicKey);
 
         int id = Convert.ToInt32(insertCmd.ExecuteScalar());
-        string token = CreateSessionInternal(conn, id);
         Log.Debug("RegisterUser created userId={UserId}", id);
-        return (id, token);
+        return id;
     }
 
-    public (int id, string name, string token)? Authenticate(string email, string password)
+    public (int id, string name)? Authenticate(string email, string password)
     {
         string normEmail = email.Trim().ToLowerInvariant();
         using var conn = new SqliteConnection(cs);
@@ -453,85 +474,14 @@ public class Database
             {
                 reader.Close();
                 if (upgradeHash != null) UpgradePasswordHash(id, upgradeHash);
-                string token = CreateSessionInternal(conn, id);
                 Log.Debug("Authenticate successful for userId={UserId}", id);
-                return (id, name, token);
+                return (id, name);
             }
         }
         return null;
     }
 
-    private const int SessionLifetimeDays = 7;
-
-    private string CreateSessionInternal(SqliteConnection conn, int userId)
-    {
-        string token = Guid.NewGuid().ToString("N");
-        var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-            INSERT INTO Sessions (Token, UserId, CreatedAt, ExpiresAt, IsRevoked)
-            VALUES (@token, @uid, @time, @expires, 0)";
-        cmd.Parameters.AddWithValue("@token", token);
-        cmd.Parameters.AddWithValue("@uid", userId);
-        cmd.Parameters.AddWithValue("@time", DateTime.UtcNow.ToString("o"));
-        cmd.Parameters.AddWithValue("@expires", DateTime.UtcNow.AddDays(SessionLifetimeDays).ToString("o"));
-        cmd.ExecuteNonQuery();
-        return token;
-    }
-
-    public string CreateSession(int userId)
-    {
-        using var conn = new SqliteConnection(cs);
-        conn.Open();
-        return CreateSessionInternal(conn, userId);
-    }
-
-    public int? ValidateSession(string token)
-    {
-        using var conn = new SqliteConnection(cs);
-        conn.Open();
-        CleanupSessions(conn);
-        var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-            SELECT s.UserId FROM Sessions s
-            JOIN Clients c ON c.Id = s.UserId
-            WHERE s.Token = @token AND s.IsRevoked = 0 AND s.ExpiresAt > @now AND c.IsActive = 1";
-        cmd.Parameters.AddWithValue("@token", token);
-        cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("o"));
-        var result = cmd.ExecuteScalar();
-        return result != null ? Convert.ToInt32(result) : null;
-    }
-
-    /// <summary>Logout: удаление сессии по требованию 1.1.2.</summary>
-    public void RevokeSession(string token)
-    {
-        using var conn = new SqliteConnection(cs);
-        conn.Open();
-        var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM Sessions WHERE Token = @token";
-        cmd.Parameters.AddWithValue("@token", token);
-        cmd.ExecuteNonQuery();
-    }
-
-    /// <summary>Отзыв всех сессий пользователя (смена пароля, бан).</summary>
-    public void RevokeAllUserSessions(int userId)
-    {
-        using var conn = new SqliteConnection(cs);
-        conn.Open();
-        var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM Sessions WHERE UserId = @uid";
-        cmd.Parameters.AddWithValue("@uid", userId);
-        cmd.ExecuteNonQuery();
-    }
-
-    private static void CleanupSessions(SqliteConnection conn)
-    {
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM Sessions WHERE ExpiresAt <= @now OR IsRevoked = 1";
-        cmd.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("o"));
-        cmd.ExecuteNonQuery();
-    }
-
-    // ---------- Роли, профиль, блокировка (Фаза B) ----------
+    // ---------- Роли, профиль, блокировка ----------
 
     public string GetUserRole(int userId)
     {
@@ -647,7 +597,7 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    // ---------- Аудит (Фаза B, требование 1.7.3) ----------
+    // ---------- Аудит ----------
 
     public void WriteAudit(int? actorId, string action, int? targetId, string result, string ip, string userAgent = "")
     {
@@ -827,7 +777,7 @@ public class Database
             reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetString(3));
     }
 
-    /// <summary>Редактирование: новый шифртекст + маркер IsEdited (требование 1.2.2).</summary>
+    /// <summary>Редактирование: новый шифртекст + маркер IsEdited.</summary>
     public void UpdateMessageContent(string messageId, string nonce, string ciphertext, string tag)
     {
         using var conn = new SqliteConnection(cs);
@@ -846,7 +796,7 @@ public class Database
         cmd.ExecuteNonQuery();
     }
 
-    /// <summary>Soft-delete: DeletedAt, шифртекст сохраняется (требование 1.2.2).</summary>
+    /// <summary>Soft-delete: DeletedAt, шифртекст сохраняется.</summary>
     public void SoftDeleteMessage(string messageId)
     {
         using var conn = new SqliteConnection(cs);
@@ -1014,7 +964,7 @@ public class Database
         return ids;
     }
 
-    // ---------- Каналы (Фаза C) ----------
+    // ---------- Каналы ----------
 
     /// <summary>Создание канала; возвращает null, если имя занято.</summary>
     public string? CreateChannel(string name, int ownerId)

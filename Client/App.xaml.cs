@@ -18,7 +18,7 @@ namespace SecureChat.Client;
 public partial class App : Application
 {
     public static string CurrentTheme { get; set; } = "Dark";
-    /// <summary>Текущая локаль в полном формате BCP-47/ISO: "ru-RU" | "en-US" (требование 1.8.1).</summary>
+    /// <summary>Текущая локаль в полном формате BCP-47/ISO: "ru-RU" | "en-US".</summary>
     public static string CurrentLocale { get; set; } = "ru-RU";
     public static NetworkService Network { get; } = new();
 
@@ -36,7 +36,7 @@ public partial class App : Application
             .Enrich.FromLogContext()
             .CreateLogger();
 
-        // Локализация (требование 1.8): CurrentCulture — формат данных, CurrentUICulture — строки UI.
+        // Локализация: CurrentCulture — формат данных, CurrentUICulture — строки UI.
         // Язык UI переключается на лету; формат логов от языка не зависит (всегда English/Invariant).
         ApplyLanguageFromConfig();
         FrameworkElement.LanguageProperty.OverrideMetadata(typeof(FrameworkElement),
@@ -53,15 +53,15 @@ public partial class App : Application
         CurrentTheme = LoadThemeFromSettings();
         ApplyThemeInternal(CurrentTheme, saveToSettings: false);
 
-        var saved = LoginWindow.ReadAutoLoginConfig();
+        var saved = ConfigService.ReadAutoLoginConfig();
         if (saved != null)
         {
             Log.Information("Auto-login attempt userId={UserId}", saved.UserId);
-            var session = LoginWindow.TryAutoLoginBlocking(Network, saved, timeoutMs: 5000);
+            var session = ConfigService.TryAutoLoginBlocking(Network, saved, timeoutMs: 5000);
             if (session != null)
             {
                 var mainWindow = new MainWindow(session.UserId, session.UserName, session.Token,
-                    LoginWindow.StaticServerUrl, session.PublicKey, session.PrivateKey, session.Role, Network);
+                    ConfigService.DefaultServerUrl, session.PublicKey, session.PrivateKey, session.Role, Network);
                 MainWindow = mainWindow;
                 ShutdownMode = ShutdownMode.OnMainWindowClose;
                 mainWindow.Show();
@@ -100,7 +100,7 @@ public partial class App : Application
 
     public static void ApplyTheme(string theme) => ApplyThemeInternal(theme, saveToSettings: true);
 
-    // ---------- Локализация (Лаба 8) ----------
+    // ---------- Локализация ----------
 
     /// <summary>
     /// Смена локали на лету: принимается полный код ("ru-RU", "en-US") или короткий ("ru", "en").

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using SecureChat.Core;
 using SecureChat.Security;
+using SecureChat.Server.Auth;
 using Serilog;
 using ILogger = Serilog.ILogger;
 using Serilog.Context;
@@ -15,16 +16,21 @@ namespace SecureChat.Server;
 /// </summary>
 public class ChatHub : Hub
 {
-    private readonly Database _db;
-    private readonly EmailService _email;
+    private readonly IDatabase _db;
+    private readonly IEmailService _email;
     private readonly ConnectionRegistry _registry;
+    private readonly IJwtTokenService _tokens;
+    private readonly ISessionRepository _sessions;
     private readonly ILogger _log = Serilog.Log.ForContext<ChatHub>();
 
-    public ChatHub(Database db, EmailService email, ConnectionRegistry registry)
+    public ChatHub(IDatabase db, IEmailService email, ConnectionRegistry registry,
+        IJwtTokenService tokens, ISessionRepository sessions)
     {
         _db = db;
         _email = email;
         _registry = registry;
+        _tokens = tokens;
+        _sessions = sessions;
     }
 
     private int? UserId => _registry.GetUserId(Context.ConnectionId);
@@ -122,8 +128,13 @@ public class ChatHub : Hub
             return;
         }
 
+        // выпуск JWT-сессии: подписанный токен клиенту, строка сессии (jti) — в репозиторий
+        string role = _db.GetUserRole(userId);
+        var issued = _tokens.Issue(userId, auth.Value.name, role);
+        _sessions.Create(userId, issued);
+
         _registry.Register(userId, Context.ConnectionId);
-        RememberSessionToken(auth.Value.token);
+        RememberSessionToken(issued.Token);
 
         WriteAudit(userId, "Login", userId, "Ok");
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Login", userId);
@@ -133,7 +144,7 @@ public class ChatHub : Hub
             new LoginResponsePayload
             {
                 Status = "Ok", UserId = userId, UserName = auth.Value.name,
-                Token = auth.Value.token, Role = _db.GetUserRole(userId)
+                Token = issued.Token, Role = role
             });
 
         await NotifyOnlineStatus(userId);
@@ -162,30 +173,34 @@ public class ChatHub : Hub
         _log.Information("Registration request for {MaskedEmail}", PiiMasker.Email(p.Email));
 
         var verifyResult = _db.VerifyAndConsumeCode(p.Email, p.Code);
-        if (verifyResult == Database.CodeVerifyResult.Invalid)
+        if (verifyResult == CodeVerifyResult.Invalid)
         {
             _log.Warning("Invalid verification code for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "InvalidCode" });
             return;
         }
-        if (verifyResult == Database.CodeVerifyResult.Expired)
+        if (verifyResult == CodeVerifyResult.Expired)
         {
             _log.Warning("Verification code expired for {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "CodeExpired" });
             return;
         }
 
-        var reg = _db.RegisterUser(p.Email, p.Password, p.UserName, p.PublicKey);
-        if (reg == null)
+        int? regId = _db.RegisterUser(p.Email, p.Password, p.UserName, p.PublicKey);
+        if (regId == null)
         {
             _log.Warning("User already exists: {MaskedEmail}", PiiMasker.Email(p.Email));
             await Respond("RegisterAccountResponse", new RegisterAccountResponsePayload { Status = "UserExists" });
             return;
         }
 
-        int userId = reg.Value.id;
+        int userId = regId.Value;
+        string role = _db.GetUserRole(userId);
+        var issued = _tokens.Issue(userId, p.UserName, role);
+        _sessions.Create(userId, issued);
+
         _registry.Register(userId, Context.ConnectionId);
-        RememberSessionToken(reg.Value.token);
+        RememberSessionToken(issued.Token);
 
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId} success=true", "Register", userId);
         _log.Information("New user registered userId={UserId}", userId);
@@ -195,7 +210,7 @@ public class ChatHub : Hub
         await Respond("RegisterAccountResponse",
             new RegisterAccountResponsePayload
             {
-                Status = "Ok", AssignedId = userId, Token = reg.Value.token, Role = _db.GetUserRole(userId)
+                Status = "Ok", AssignedId = userId, Token = issued.Token, Role = role
             });
 
         await NotifyOnlineStatus(userId);
@@ -205,9 +220,9 @@ public class ChatHub : Hub
     {
         if (p == null) return;
 
-        // Идентификация только по токену сессии: знание UserId не даёт доступа.
-        int? userId = null;
-        if (!string.IsNullOrEmpty(p.Token)) userId = _db.ValidateSession(p.Token);
+        // Идентификация только по JWT: подпись/срок проверяет IJwtTokenService,
+        // строку сессии (jti) и активность пользователя — SessionRepository.
+        int? userId = string.IsNullOrEmpty(p.Token) ? null : _sessions.Validate(p.Token);
 
         if (userId == null)
         {
@@ -238,7 +253,7 @@ public class ChatHub : Hub
         if (_registry.GetUserId(Context.ConnectionId) is not int uid) return;
 
         if (Context.Items.TryGetValue(SessionTokenKey, out var tokenObj) && tokenObj is string token)
-            _db.RevokeSession(token);
+            _sessions.Revoke(token);
 
         _registry.Unregister(Context.ConnectionId, out _);
         Context.Items.Remove(SessionTokenKey);
@@ -265,7 +280,7 @@ public class ChatHub : Hub
 
         int adminId = UserId!.Value;
         _db.SetUserActive(p.TargetId, false);
-        _db.RevokeAllUserSessions(p.TargetId); // требование 1.1.5: отзыв сессий при бане
+        _sessions.RevokeAllForUser(p.TargetId); // отзыв сессий при бане
 
         foreach (var connId in _registry.GetConnections(p.TargetId))
         {
@@ -273,7 +288,7 @@ public class ChatHub : Hub
             await Clients.Client(connId).SendAsync("Banned", new BannedPayload { Reason = p.Reason });
         }
 
-        // требование 1.1.5/1.2.7: при бане — удаление из каналов;
+        // при бане — удаление из каналов;
         // Owner каждого канала выполнит ротацию GroupKey по событию ChannelMemberRemoved
         foreach (var channelId in _db.DeleteUserFromAllChannels(p.TargetId))
         {
@@ -327,7 +342,7 @@ public class ChatHub : Hub
         return Task.FromResult(new SimpleStatusPayload { Status = "Ok" });
     }
 
-    /// <summary>Смена пароля: проверка текущего, отзыв всех сессий (требование 1.1.4).</summary>
+    /// <summary>Смена пароля: проверка текущего, отзыв всех сессий.</summary>
     public async Task<SimpleStatusPayload> ChangePassword(ChangePasswordPayload? p)
     {
         if (UserId is not int uid) return new SimpleStatusPayload { Status = "Forbidden" };
@@ -342,7 +357,7 @@ public class ChatHub : Hub
             return new SimpleStatusPayload { Status = "WeakPassword" };
 
         _db.UpdatePassword(uid, p.NewPassword);
-        _db.RevokeAllUserSessions(uid);
+        _sessions.RevokeAllForUser(uid);
 
         WriteAudit(uid, "ChangePassword", uid, "Ok");
         _log.ForContext("Audit", true).Information("AUDIT {Action} userId={UserId}", "ChangePassword", uid);
@@ -351,7 +366,7 @@ public class ChatHub : Hub
         return new SimpleStatusPayload { Status = "Ok" };
     }
 
-    // ---------- Профиль: статус и аватар (требование 1.1.4) ----------
+    // ---------- Профиль: статус и аватар ----------
 
     public Task<SimpleStatusPayload> UpdateStatus(UpdateStatusPayload? p)
     {
@@ -426,7 +441,7 @@ public class ChatHub : Hub
         });
     }
 
-    // ---------- Аудит (просмотр только Admin, требование 1.1.3) ----------
+    // ---------- Аудит (просмотр только Admin) ----------
 
     public Task<AuditLogResponsePayload?> GetAuditLog(GetAuditLogPayload? p)
     {
@@ -442,7 +457,7 @@ public class ChatHub : Hub
         });
     }
 
-    // ---------- Каналы (Фаза C) ----------
+    // ---------- Каналы ----------
 
     private bool IsManagerOrAdmin() => Role() is "Admin" or "Manager";
 
@@ -744,7 +759,7 @@ public class ChatHub : Hub
     public async Task Ack(AckPayload? p)
     {
         if (UserId == null || p == null) return;
-        // Delivered — при получении, Read — при открытии чата (требование 1.2.5)
+        // Delivered — при получении, Read — при открытии чата
         if (p.Status != "Delivered" && p.Status != "Read") return;
 
         _db.UpdateMessageStatus(p.MessageId, p.Status);
@@ -774,7 +789,7 @@ public class ChatHub : Hub
         });
     }
 
-    // ---------- Редактирование и удаление (Фаза D, требование 1.2.2) ----------
+    // ---------- Редактирование и удаление ----------
 
     public async Task<SimpleStatusPayload> EditMessage(EditMessagePayload? p)
     {

@@ -4,7 +4,7 @@ using ClosedXML.Excel;
 namespace SecureChat.Core;
 
 /// <summary>
-/// Экспорт чата в Excel (требование 1.5.1, ClosedXML).
+/// Экспорт чата в Excel (ClosedXML).
 /// Formula injection — через CellText.Sanitize; даты и числа — по CurrentCulture.
 /// </summary>
 public class ExcelStatsRenderer : IStatsRenderer

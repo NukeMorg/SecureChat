@@ -4,7 +4,7 @@ using Xunit;
 namespace SecureChat.Tests;
 
 /// <summary>
-/// Тесты групповой криптографии (Фаза C): Sender Keys ratchet, «догон»,
+/// Тесты групповой криптографии: Sender Keys ratchet, «догон»,
 /// replay-защита, ротация ключа.
 /// </summary>
 public class ChannelCryptoTests

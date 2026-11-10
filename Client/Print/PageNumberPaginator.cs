@@ -9,7 +9,7 @@ using Brushes = System.Windows.Media.Brushes;
 namespace SecureChat.Client.Print;
 
 /// <summary>
-/// Обёртка пагинатора: рисует номер страницы в футере каждой страницы (требование 1.6).
+/// Обёртка пагинатора: рисует номер страницы в футере каждой страницы.
 /// Оригинальная страница вставляется как дочерний Visual, поверх — текст футера.
 /// </summary>
 public class PageNumberPaginator : DocumentPaginator

@@ -13,13 +13,15 @@
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-            <Button Content="Обновить" Width="100" Height="26" Click="Refresh_Click"
+            <Button Content="Обновить" Width="100" Height="26" Command="{Binding RefreshCommand}"
                     Background="#FF1E88E5" Foreground="White" BorderThickness="0"/>
             <TextBlock x:Name="CountTextBlock" Margin="10,0,0,0" VerticalAlignment="Center" FontSize="12"
-                       Foreground="{DynamicResource StatusForeground}"/>
+                       Foreground="{DynamicResource StatusForeground}"
+                       Text="{Binding CountText}"/>
         </StackPanel>
 
         <DataGrid x:Name="AuditGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True"
+                  ItemsSource="{Binding Entries}"
                   Background="{DynamicResource ChatAreaBackground}" Foreground="{DynamicResource ForegroundColor}"
                   BorderThickness="0" RowBackground="Transparent" AlternatingRowBackground="Transparent"
                   GridLinesVisibility="Horizontal" HeadersVisibility="Column" FontSize="12">

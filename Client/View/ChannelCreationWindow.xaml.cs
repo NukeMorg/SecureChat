@@ -1,79 +1,31 @@
-using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.ComponentModel;
-using System.Linq;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
 using SecureChat.Client.Models;
+using SecureChat.Client.Services;
+using SecureChat.Client.ViewModels;
 
 namespace SecureChat.Client.View;
 
+/// <summary>
+/// Представление диалога создания канала; валидация и фильтрация — в <see cref="ChannelCreationViewModel"/>.
+/// </summary>
 public partial class ChannelCreationWindow : Window
 {
-    private readonly ObservableCollection<ContactSelectionItem> _allItems;
-    private ICollectionView _itemsView;
+    private readonly ChannelCreationViewModel _vm;
 
-    public string ChannelName => ChannelNameTextBox.Text.Trim();
-    public List<int> SelectedMemberIds => _allItems.Where(i => i.IsSelected).Select(i => i.Id).ToList();
+    public string ChannelName => _vm.ChannelName.Trim();
+    public List<int> SelectedMemberIds => _vm.SelectedMemberIds;
 
     public ChannelCreationWindow(IEnumerable<ContactItem> contacts)
     {
         InitializeComponent();
-        _allItems = new ObservableCollection<ContactSelectionItem>(
-            contacts.Select(c => new ContactSelectionItem
-            {
-                Id = c.Id,
-                Name = c.Name,
-                RawName = c.RawName,
-                IsOnline = c.IsOnline,
-                IsSelected = false
-            })
-        );
-        _itemsView = CollectionViewSource.GetDefaultView(_allItems);
-        ParticipantsListBox.ItemsSource = _itemsView;
+        _vm = new ChannelCreationViewModel(contacts, new DialogService());
+        DataContext = _vm;
+
+        _vm.ConfirmRequested += (_, _) => { DialogResult = true; Close(); };
+        _vm.CancelRequested += (_, _) => { DialogResult = false; Close(); };
+        _vm.FocusNameRequested += (_, _) => ChannelNameTextBox.Focus();
+
         ChannelNameTextBox.Focus();
-    }
-
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        string query = SearchBox.Text.Trim();
-        if (string.IsNullOrEmpty(query))
-        {
-            _itemsView.Filter = null;
-        }
-        else
-        {
-            _itemsView.Filter = item =>
-            {
-                if (item is ContactSelectionItem ci)
-                {
-                    return (!string.IsNullOrEmpty(ci.RawName) && ci.RawName.Contains(query, StringComparison.OrdinalIgnoreCase))
-                        || ci.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
-                        || ci.Id.ToString() == query;
-                }
-                return false;
-            };
-        }
-        _itemsView.Refresh();
-    }
-
-    private void Ok_Click(object sender, RoutedEventArgs e)
-    {
-        if (string.IsNullOrWhiteSpace(ChannelName))
-        {
-            MessageBox.Show("Введите название канала.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-            ChannelNameTextBox.Focus();
-            return;
-        }
-        DialogResult = true;
-        Close();
-    }
-
-    private void Cancel_Click(object sender, RoutedEventArgs e)
-    {
-        DialogResult = false;
-        Close();
     }
 }

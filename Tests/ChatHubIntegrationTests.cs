@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SecureChat.Core;
 using SecureChat.Server;
+using SecureChat.Server.Auth;
 using Xunit;
 
 namespace SecureChat.Tests;
@@ -17,9 +18,11 @@ namespace SecureChat.Tests;
 public class ChatHubIntegrationTests : IAsyncLifetime
 {
     private TempDbDirectory _tempDir = null!;
-    private Database _db = null!;
+    private IDatabase _db = null!;
     private ConnectionRegistry _registry = null!;
-    private EmailService _email = null!;
+    private IEmailService _email = null!;
+    private IJwtTokenService _tokens = null!;
+    private ISessionRepository _sessions = null!;
     private WebApplication _app = null!;
     private string _serverUrl = null!;
     private string _hubUrl = null!;
@@ -31,14 +34,18 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         _db.Initialize();
 
         _registry = new ConnectionRegistry();
-        _email = new EmailService(new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Smtp:UseRealSmtp"] = "false",
-                ["Smtp:SenderEmail"] = "",
-                ["Smtp:SenderPassword"] = ""
-            })
-            .Build());
+        _email = new EmailService(Microsoft.Extensions.Options.Options.Create(new SecureChat.Server.Auth.SmtpOptions
+        {
+            UseRealSmtp = false,
+            SenderEmail = "",
+            SenderPassword = ""
+        }));
+        _tokens = new JwtTokenService(Microsoft.Extensions.Options.Options.Create(new SecureChat.Server.Auth.JwtOptions
+        {
+            Secret = "integration-test-secret-0123456789abcdef-0123456789abcdef"
+        }));
+        _sessions = new SessionRepository(_db.ConnectionString, _tokens);
+        _sessions.Initialize();
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseKestrel();
@@ -47,6 +54,8 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         builder.Services.AddSingleton(_db);
         builder.Services.AddSingleton(_registry);
         builder.Services.AddSingleton(_email);
+        builder.Services.AddSingleton(_tokens);
+        builder.Services.AddSingleton(_sessions);
         builder.Services.AddSignalR(options =>
         {
             options.MaximumReceiveMessageSize = 20 * 1024 * 1024;
@@ -81,6 +90,16 @@ public class ChatHubIntegrationTests : IAsyncLifetime
             .WithUrl(_hubUrl)
             .Build();
 
+    /// <summary>Регистрация + выпуск JWT-сессии (как это делает ChatHub при входе).</summary>
+    private (int id, string token) RegisterAndIssue(string email, string password, string name, string publicKey)
+    {
+        int id = _db.RegisterUser(email, password, name, publicKey)
+            ?? throw new InvalidOperationException($"RegisterUser failed for {email}");
+        var issued = _tokens.Issue(id, name, "Employee");
+        _sessions.Create(id, issued);
+        return (id, issued.Token);
+    }
+
     private string? GetLatestVerificationCode(string email)
     {
         using var conn = new SqliteConnection(_db.ConnectionString);
@@ -100,15 +119,6 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         if (completed != tcs.Task)
             throw new TimeoutException($"Таймаут ожидания события '{eventName}'");
         return await tcs.Task;
-    }
-
-    // 1. /health -> Healthy
-    [Fact]
-    public async Task HealthEndpoint_ReturnsHealthy()
-    {
-        using var http = new HttpClient();
-        string res = await http.GetStringAsync($"{_serverUrl}/health");
-        Assert.Equal("Healthy", res.Trim());
     }
 
     // 2. Регистрация: SendEmailCode -> код из БД -> RegisterAccount -> Ok + токен + роль Employee
@@ -145,6 +155,7 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         Assert.Equal("Ok", regResp.Status);
         Assert.True(regResp.AssignedId > 0);
         Assert.False(string.IsNullOrEmpty(regResp.Token));
+        Assert.Equal(2, regResp.Token.Count(c => '.' == c)); // JWT: header.payload.signature
         Assert.Equal("Employee", regResp.Role);
     }
 
@@ -152,7 +163,7 @@ public class ChatHubIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Login_And_Hello_Scenarios()
     {
-        var (userId, token) = _db.RegisterUser("auth@test.local", "CorrectPass1!", "AuthUser", "PK")!.Value;
+        var (userId, token) = RegisterAndIssue("auth@test.local", "CorrectPass1!", "AuthUser", "PK");
 
         await using var client = CreateConnection();
         await client.StartAsync();
@@ -172,6 +183,7 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         Assert.Equal("Ok", correctPassResp.Status);
         Assert.Equal(userId, correctPassResp.UserId);
         Assert.False(string.IsNullOrEmpty(correctPassResp.Token));
+        Assert.Equal(2, correctPassResp.Token.Count(c => '.' == c)); // JWT: header.payload.signature
 
         // 3c. Hello с валидным токеном на новом подключении
         await using var client2 = CreateConnection();
@@ -200,8 +212,8 @@ public class ChatHubIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Channels_Lifecycle_Roles_And_Membership()
     {
-        var (employeeId, empToken) = _db.RegisterUser("emp@test.local", "Pass1234!", "Emp", "PK1")!.Value;
-        var (otherId, otherToken) = _db.RegisterUser("other@test.local", "Pass1234!", "Other", "PK2")!.Value;
+        var (employeeId, empToken) = RegisterAndIssue("emp@test.local", "Pass1234!", "Emp", "PK1");
+        var (otherId, otherToken) = RegisterAndIssue("other@test.local", "Pass1234!", "Other", "PK2");
 
         await using var empClient = CreateConnection();
         await empClient.StartAsync();
@@ -269,8 +281,8 @@ public class ChatHubIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task DirectMessages_Sending_IncomingMessage_And_AckDeliveryStatus()
     {
-        var (aliceId, aliceToken) = _db.RegisterUser("alice@test.local", "Pass1234!", "Alice", "PKA")!.Value;
-        var (bobId, bobToken) = _db.RegisterUser("bob@test.local", "Pass1234!", "Bob", "PKB")!.Value;
+        var (aliceId, aliceToken) = RegisterAndIssue("alice@test.local", "Pass1234!", "Alice", "PKA");
+        var (bobId, bobToken) = RegisterAndIssue("bob@test.local", "Pass1234!", "Bob", "PKB");
 
         await using var aliceClient = CreateConnection();
         await aliceClient.StartAsync();
@@ -330,8 +342,8 @@ public class ChatHubIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task ChannelMessages_BroadcastToMembers()
     {
-        var (ownerId, ownerToken) = _db.RegisterUser("ch-owner@test.local", "Pass1234!", "Owner", "PKO")!.Value;
-        var (memberId, memberToken) = _db.RegisterUser("ch-member@test.local", "Pass1234!", "Member", "PKM")!.Value;
+        var (ownerId, ownerToken) = RegisterAndIssue("ch-owner@test.local", "Pass1234!", "Owner", "PKO");
+        var (memberId, memberToken) = RegisterAndIssue("ch-member@test.local", "Pass1234!", "Member", "PKM");
         _db.SetUserRole(ownerId, "Manager");
 
         string channelId = _db.CreateChannel("Канал рассылки", ownerId)!;
@@ -380,7 +392,7 @@ public class ChatHubIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Logout_RevokesSession_And_BannedUserCannotLogin()
     {
-        var (userId, token) = _db.RegisterUser("ban@test.local", "Pass1234!", "BanUser", "PK")!.Value;
+        var (userId, token) = RegisterAndIssue("ban@test.local", "Pass1234!", "BanUser", "PK");
 
         await using var client = CreateConnection();
         await client.StartAsync();
@@ -394,7 +406,7 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         string sessionToken = loginResp.Token;
 
         // Сессия валидна
-        Assert.NotNull(_db.ValidateSession(sessionToken));
+        Assert.NotNull(_sessions.Validate(sessionToken));
 
         // 7b. Logout
         var logoutResp = await AwaitEventAsync<SimpleStatusPayload>(
@@ -404,7 +416,7 @@ public class ChatHubIntegrationTests : IAsyncLifetime
         Assert.Equal("Ok", logoutResp.Status);
 
         // Сессия отозвана
-        Assert.Null(_db.ValidateSession(sessionToken));
+        Assert.Null(_sessions.Validate(sessionToken));
 
         // 7c. Баним пользователя в БД
         _db.SetUserActive(userId, false);

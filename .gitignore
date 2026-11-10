@@ -70,16 +70,15 @@ x86/
 # Publish Web Output
 *.[Pp]ublish.xml
 
-### Secrets and runtime data (требование 1.9.2)
-# Конфиги не хранятся в репо — только appsettings.Example.json
-appsettings.json
-appsettings.*.json
-!appsettings.Example.json
+### Secrets and runtime data
+# SMTP-пароль не хранится в репозитории — только через user-secrets
 *.db
 *.db-shm
 *.db-wal
 logs/
 avatars/
 secrets/
+.zcode/
+Images/
 .env
 *.pfx.zcode/

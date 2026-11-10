@@ -1,7 +1,7 @@
 namespace SecureChat.Security;
 
 /// <summary>
-/// Маскирование PII в логах (требование 1.7.2): email, телефон, токены.
+/// Маскирование PII в логах: email, телефон, токены.
 /// Форматирование — culture-invariant, не зависит от локали и языка UI.
 /// </summary>
 public static class PiiMasker

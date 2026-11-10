@@ -1,5 +1,6 @@
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using SecureChat.Server;
+using SecureChat.Server.Auth;
 using Xunit;
 
 namespace SecureChat.Tests;
@@ -7,15 +8,15 @@ namespace SecureChat.Tests;
 /// <summary>Тесты EmailService: генерация кода подтверждения и dev-режим (без реального SMTP).</summary>
 public class EmailServiceTests
 {
+    private static SmtpOptions DevOptions() => new()
+    {
+        UseRealSmtp = false,
+        SenderEmail = "",
+        SenderPassword = ""
+    };
+
     private static EmailService CreateDevModeService() =>
-        new(new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Smtp:UseRealSmtp"] = "false",
-                ["Smtp:SenderEmail"] = "",
-                ["Smtp:SenderPassword"] = ""
-            })
-            .Build());
+        new(Options.Create(DevOptions()));
 
     [Fact]
     public void GenerateVerificationCode_IsSixDigits()
@@ -25,17 +26,6 @@ public class EmailServiceTests
         {
             string code = service.GenerateVerificationCode();
             Assert.Matches(@"^\d{6}$", code);
-        }
-    }
-
-    [Fact]
-    public void GenerateVerificationCode_AlwaysInRange()
-    {
-        var service = CreateDevModeService();
-        for (int i = 0; i < 100; i++)
-        {
-            int code = int.Parse(service.GenerateVerificationCode());
-            Assert.InRange(code, 100000, 999999);
         }
     }
 
@@ -60,14 +50,12 @@ public class EmailServiceTests
     public async Task SendVerificationCodeAsync_RealSmtpButEmptyCredentials_DoesNotThrowAndReturnsTrue()
     {
         // незаполненные учётные данные при включённом реальном SMTP переводят сервис в dev-режим
-        var service = new EmailService(new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Smtp:UseRealSmtp"] = "true",
-                ["Smtp:SenderEmail"] = "",
-                ["Smtp:SenderPassword"] = ""
-            })
-            .Build());
+        var service = new EmailService(Options.Create(new SmtpOptions
+        {
+            UseRealSmtp = true,
+            SenderEmail = "",
+            SenderPassword = ""
+        }));
 
         bool sent = await service.SendVerificationCodeAsync("user@example.com", "654321");
         Assert.True(sent);

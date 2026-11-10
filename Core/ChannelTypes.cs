@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace SecureChat.Core;
 
 /// <summary>
-/// DTO-типы каналов (Фаза C). Сервер видит только шифртекст и метаданные:
+/// DTO-типы каналов. Сервер видит только шифртекст и метаданные:
 /// GroupKey передаётся в зашифрованном виде через 1-1 RSA + AES-GCM.
 /// </summary>
 

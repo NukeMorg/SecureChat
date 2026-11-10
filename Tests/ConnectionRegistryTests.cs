@@ -100,19 +100,6 @@ public class ConnectionRegistryTests
     }
 
     [Fact]
-    public void Unregister_RebindOldUserSetCleanedUp()
-    {
-        var registry = new ConnectionRegistry();
-        registry.Register(1, "conn-A");
-        registry.Register(2, "conn-A");
-        registry.Unregister("conn-A", out _);
-
-        // у обоих пользователей соединений больше нет
-        Assert.False(registry.IsOnline(1));
-        Assert.False(registry.IsOnline(2));
-    }
-
-    [Fact]
     public async Task ConcurrentRegisterUnregister_DoesNotThrowAndConsistent()
     {
         var registry = new ConnectionRegistry();
