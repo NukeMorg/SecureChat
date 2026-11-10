@@ -1,45 +1,31 @@
 ﻿using System.Windows;
+using SecureChat.Client.Services;
+using SecureChat.Client.ViewModels;
 
 namespace SecureChat.Client.View;
 
 /// <summary>
-/// Модальный диалог смены пароля. Клиент проверяет совпадение и заполненность;
-/// сложность пароля дополнительно проверяет сервер (Validators.IsValidPassword).
+/// Представление модального диалога смены пароля; валидация — в <see cref="PasswordDialogViewModel"/>.
 /// </summary>
 public partial class PasswordDialog : Window
 {
-    public string CurrentPassword => CurrentPasswordBox.Password;
-    public string NewPassword => NewPasswordBox.Password;
+    private readonly PasswordDialogViewModel _vm;
+
+    public string CurrentPassword => _vm.CurrentPassword;
+    public string NewPassword => _vm.NewPassword;
 
     public PasswordDialog()
     {
         InitializeComponent();
-    }
+        _vm = new PasswordDialogViewModel(new DialogService());
+        DataContext = _vm;
 
-    private void Ok_Click(object sender, RoutedEventArgs e)
-    {
-        if (string.IsNullOrEmpty(CurrentPasswordBox.Password))
-        {
-            MessageBox.Show("Введите текущий пароль.", "Смена пароля", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        if (string.IsNullOrEmpty(NewPasswordBox.Password))
-        {
-            MessageBox.Show("Введите новый пароль.", "Смена пароля", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        if (NewPasswordBox.Password != ConfirmPasswordBox.Password)
-        {
-            MessageBox.Show("Новые пароли не совпадают.", "Смена пароля", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        DialogResult = true;
-        Close();
-    }
+        // PasswordBox не поддерживает прямую привязку — синхронизируем с ViewModel вручную
+        CurrentPasswordBox.PasswordChanged += (_, _) => _vm.CurrentPassword = CurrentPasswordBox.Password;
+        NewPasswordBox.PasswordChanged += (_, _) => _vm.NewPassword = NewPasswordBox.Password;
+        ConfirmPasswordBox.PasswordChanged += (_, _) => _vm.ConfirmPassword = ConfirmPasswordBox.Password;
 
-    private void Cancel_Click(object sender, RoutedEventArgs e)
-    {
-        DialogResult = false;
-        Close();
+        _vm.ConfirmRequested += (_, _) => { DialogResult = true; Close(); };
+        _vm.CancelRequested += (_, _) => { DialogResult = false; Close(); };
     }
 }

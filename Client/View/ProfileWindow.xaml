@@ -9,15 +9,15 @@
         <Border Width="96" Height="96" CornerRadius="48"
                 Background="{DynamicResource ContactItemBackground}"
                 HorizontalAlignment="Center">
-            <Image x:Name="AvatarImage" Stretch="UniformToFill"/>
+            <Image x:Name="AvatarImage" Stretch="UniformToFill" Source="{Binding Avatar}"/>
         </Border>
-        <TextBlock x:Name="NameText" FontSize="18" FontWeight="Bold"
+        <TextBlock x:Name="NameText" Text="{Binding DisplayName}" FontSize="18" FontWeight="Bold"
                    HorizontalAlignment="Center" Margin="0,12,0,2"/>
-        <TextBlock x:Name="IdRoleText" FontSize="12" HorizontalAlignment="Center"
+        <TextBlock x:Name="IdRoleText" Text="{Binding IdRoleText}" FontSize="12" HorizontalAlignment="Center"
                    Foreground="{DynamicResource StatusForeground}"/>
-        <TextBlock x:Name="OnlineText" FontSize="12" HorizontalAlignment="Center" Margin="0,6,0,0"
+        <TextBlock x:Name="OnlineText" Text="{Binding OnlineText}" FontSize="12" HorizontalAlignment="Center" Margin="0,6,0,0"
                    Foreground="{DynamicResource StatusForeground}"/>
-        <TextBlock x:Name="StatusTextBlock" FontSize="13" TextWrapping="Wrap" TextAlignment="Center"
+        <TextBlock x:Name="StatusTextBlock" Text="{Binding StatusText}" FontSize="13" TextWrapping="Wrap" TextAlignment="Center"
                    Margin="0,10,0,0" HorizontalAlignment="Center"/>
         <Button Content="Закрыть" Width="100" Height="28" Margin="0,16,0,0" Click="Close_Click"
                 HorizontalAlignment="Center"

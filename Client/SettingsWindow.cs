@@ -1,17 +1,22 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using Application = System.Windows.Application;
 using SecureChat.Client.Services;
+using SecureChat.Client.ViewModels;
 
 namespace SecureChat.Client;
 
 /// <summary>
 /// Настройки (Лаба 8): язык (RU/EN, переключение на лету) и тема.
-/// Окно строится кодом в стиле существующих диалогов (тема через DynamicResource).
+/// Окно строится кодом в стиле существующих диалогов (тема через DynamicResource);
+/// состояние выбора — в <see cref="SettingsViewModel"/>.
 /// </summary>
 public class SettingsWindow : Window
 {
+    private readonly SettingsViewModel _vm = new();
+
     private readonly ComboBox _language = new()
     {
         ItemsSource = new[] { "Русский (ru-RU)", "English (en-US)" },
@@ -34,11 +39,13 @@ public class SettingsWindow : Window
         Background = ((App)Application.Current).MainWindow?.Background ?? SystemColors.WindowBrush;
         Foreground = ((App)Application.Current).MainWindow?.Foreground ?? SystemColors.ControlTextBrush;
 
-        _language.SelectedIndex = App.CurrentLocale == "en-US" ? 1 : 0;
-        _theme.SelectedIndex = App.CurrentTheme == "Light" ? 1 : 0;
+        _language.SetBinding(ComboBox.SelectedIndexProperty,
+            new Binding(nameof(SettingsViewModel.SelectedLanguageIndex)) { Source = _vm });
+        _theme.SetBinding(ComboBox.SelectedIndexProperty,
+            new Binding(nameof(SettingsViewModel.SelectedThemeIndex)) { Source = _vm });
 
         var ok = new Button { Content = "OK", Width = 90, Height = 26, Margin = new Thickness(0, 16, 8, 0) };
-        ok.Click += (_, _) => { Save(); DialogResult = true; Close(); };
+        ok.Click += (_, _) => { _vm.Apply(); DialogResult = true; Close(); };
         var cancel = new Button { Content = "Отмена", Width = 90, Height = 26, Margin = new Thickness(0, 16, 0, 0) };
         cancel.Click += (_, _) => { DialogResult = false; Close(); };
 
@@ -70,14 +77,5 @@ public class SettingsWindow : Window
         Grid.SetRow(control, row * 2 + 1);
         grid.Children.Add(text);
         grid.Children.Add(control);
-    }
-
-    private void Save()
-    {
-        string lang = _language.SelectedIndex == 1 ? "en-US" : "ru-RU";
-        if (lang != App.CurrentLocale) App.ApplyLanguage(lang);
-
-        string theme = _theme.SelectedIndex == 1 ? "Light" : "Dark";
-        if (theme != App.CurrentTheme) App.ApplyTheme(theme);
     }
 }
