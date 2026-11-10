@@ -1,0 +1,39 @@
+services:
+  server:
+    build:
+      context: . # корень репо: Server ссылается на проекты Core и Security
+      dockerfile: Server/Dockerfile
+    # Задание 1.4: тег версии образа. Для публикации заполните SERVER_IMAGE в .env
+    # (например, <ваш-логин>/securechat-server:1.0.0) — тогда build присвоит тег, push отправит в Docker Hub.
+    image: ${SERVER_IMAGE:-securechat-server:1.0.0}
+    container_name: securechat-server
+    # CWD процесса = /data: логи и аватары пишутся в том.
+    # Конфиг (appsettings.json) читается из /app — ContentRoot зафиксирован в Program.cs.
+    working_dir: /data
+    volumes:
+      - ./data:/data
+    ports:
+      - "9000:9000" # если меняете SERVER_BASE_URL на другой порт — поправьте и это отображение
+    environment:
+      # Задание 1.3: конфигурация через переменные окружения
+      - "Server__BaseUrl=${SERVER_BASE_URL:-http://*:9000}"           # порт/адрес биндинга
+      - "Database__ConnectionString=${DATABASE_CONNECTION_STRING:-Data Source=/data/server.db;Default Timeout=10;}" # URL БД
+      - "Jwt__Secret=${JWT_SECRET}"                                   # >=32 симв.; пусто — dev-секрет с warning
+      - "Smtp__SenderEmail=${SMTP_SENDER_EMAIL}"
+      - "Smtp__SenderPassword=${SMTP_SENDER_PASSWORD}"
+      - "Smtp__UseRealSmtp=${SMTP_USE_REAL_SMTP:-false}"
+    restart: unless-stopped
+
+  cloudflared:
+    # Доступ из интернета через Cloudflare Tunnel — без проброса портов.
+    # network_mode = сеть контейнера server: в дашборде Cloudflare (Tunnels -> Public Hostname -> Service)
+    # работает и http://localhost:9000, и http://server:9000.
+    image: cloudflare/cloudflared:latest
+    container_name: securechat-cloudflared
+    network_mode: "service:server"
+    command: tunnel --no-autoupdate run
+    environment:
+      - "TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}" # токен туннеля из .env (Zero Trust -> Tunnels)
+    depends_on:
+      - server
+    restart: unless-stopped

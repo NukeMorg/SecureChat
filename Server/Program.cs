@@ -8,7 +8,13 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
-        var builder = WebApplication.CreateBuilder(args);
+        // ContentRoot фиксирован на каталоге приложения: в Docker CWD = /data (том с БД/логами/аватарами),
+        // а appsettings.json и user-secrets читаются из /app. Локально поведение не меняется.
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory
+        });
 
         builder.Configuration.AddUserSecrets<Program>(optional: true);
         builder.Configuration.AddEnvironmentVariables();

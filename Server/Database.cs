@@ -16,7 +16,13 @@ public class Database : IDatabase
     public string ConnectionString => cs;
     private static readonly ILogger Log = Serilog.Log.ForContext<Database>();
 
-    public Database() : this("Data Source=server.db;Default Timeout=10;")
+    /// <summary>
+    /// URL БД из переменной окружения Database__ConnectionString (задание 1.3: конфигурация вне кода).
+    /// По умолчанию — файл server.db в текущем каталоге (в Docker CWD = /data, том).
+    /// </summary>
+    public Database() : this(
+        Environment.GetEnvironmentVariable("Database__ConnectionString")
+        ?? "Data Source=server.db;Default Timeout=10;")
     {
     }
 

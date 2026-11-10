@@ -82,6 +82,52 @@ cd Server && dotnet user-secrets set "Smtp:SenderPassword" "..."
 ```
 Без реального SMTP (`UseRealSmtp: false`) код подтверждения печатается в лог сервера (dev-режим).
 
+### Запуск в Docker
+
+Сервер упакован в контейнер (`Server/Dockerfile`, многоэтапная сборка); `docker-compose.yml` поднимает его с томом под данные и конфигурацией через переменные окружения.
+
+```
+cp .env.example .env          # заполнить JWT_SECRET (>=32 символов) и SMTP_* (опционально)
+docker compose up --build -d  # http://localhost:9000/health -> Healthy
+```
+
+- Данные: том `./data` — `server.db` (+WAL), логи, аватары. CWD процесса = `/data`, конфиг читается из `/app` (ContentRoot зафиксирован в `Program.cs`).
+- **Конфигурация вне кода (задание 1.3)**: порт — `SERVER_BASE_URL` (`Server__BaseUrl`), URL БД — `DATABASE_CONNECTION_STRING` (`Database__ConnectionString`, по умолчанию файл в томе `/data`), секреты — `JWT_SECRET`, `SMTP_*` (двойное подчёркивание = разделитель секций). Пустой `JWT_SECRET` — встроенный dev-секрет с предупреждением в логе.
+- Доступ из локальной сети сохранён (`9000:9000`); доступ из интернета — через Cloudflare Tunnel (сервис `cloudflared`), см. раздел ниже.
+- Персистентность: `docker compose down && docker compose up -d` — аккаунты и сообщения сохраняются.
+
+### Доступ из интернета (Cloudflare Tunnel)
+
+Сервис `cloudflared` в compose подключает туннель к Cloudflare: сервер доступен из интернета без проброса портов и белого IP. Токен туннеля берётся из `.env` (`CLOUDFLARE_TUNNEL_TOKEN`, в git не попадает). `cloudflared` использует сетевую подсистему контейнера `server` (`network_mode: "service:server"`), поэтому в настройках туннеля (Zero Trust → Networks → Tunnels → Public Hostname) в качестве Service указывается `http://localhost:9000`.
+
+```
+start.bat            # Windows: поднять сервер + туннель (эквивалент docker compose up -d --build)
+stop.bat             # остановить (данные в ./data сохраняются)
+```
+
+- Туннель подключается к Cloudflare сразу после запуска; публичный домен начинает резолвиться, когда зона активна (например, домен от EU.org одобрен и NS-записи подхватились Cloudflare).
+- Переменная конфигурации `CLOUDFLARE_TUNNEL_TOKEN` — токен из дашборда (Zero Trust → Tunnels → коннектор Docker, параметр `--token`).
+- Проверка статуса: `docker compose logs cloudflared` — строка `Registered tunnel connection` означает, что туннель подключён.
+
+### Жизненный цикл образа (задание 1.4)
+
+Тег версии задаётся в `.env` (`SERVER_IMAGE=<ваш-логин>/securechat-server:1.0.0`) — `docker compose build` присваивает его образу.
+
+```
+docker compose build          # сборка + тег версии из SERVER_IMAGE
+docker login                  # ваш аккаунт Docker Hub
+docker compose push           # публикация: <ваш-логин>/securechat-server:1.0.0
+```
+
+Запуск на другой машине из реестра:
+
+```
+docker pull <ваш-логин>/securechat-server:1.0.0
+SERVER_IMAGE=<ваш-логин>/securechat-server:1.0.0 docker compose up -d
+```
+
+Новая версия приложения → поднять тег в `.env` (например, `1.1.0`) → `docker compose build` → `docker compose push`; `latest`-тег поддерживать не обязательно.
+
 ## 5. Сборка инсталлятора (Inno Setup)
 
 ```
